@@ -34,3 +34,7 @@ dotnet test tests/MonixOne.OidcProxy.Tests/MonixOne.OidcProxy.Tests.csproj -c Re
 ```
 
 A finite suite is not proof that every possible deployment/failure is covered. In particular, asynchronous Redis failover can lose acknowledged state; the identity provider and Redis do not participate in a distributed transaction. See README for the explicit guarantees and deployment limits.
+
+## React/Vite browser client
+
+ClientApp has focused Vitest/Testing Library tests for the BFF request contract, same-origin credentials and CSRF headers, 401 vs 503 handling, cancellation forwarding, malformed response contracts, protected API rendering, and native antiforgery POST logout. No token library, bearer header, localStorage or sessionStorage is used. TypeScript checking and Vite production build are separate required checks. See the sample README for local HTTPS setup.

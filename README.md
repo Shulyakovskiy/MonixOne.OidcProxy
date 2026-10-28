@@ -40,7 +40,7 @@ beetroute:development:admin-identity:sessions:<opaque-id>
 
 Use a different namespace for each BFF/client or independently deployed application. Replicas of the same BFF must use the same scope and cookie settings. Use distinct CookieName values if multiple BFF applications share one browser origin.
 
-See [the compilable host](samples/MonixOneBff.Host) and [migration notes](docs/MIGRATION-6.md) for complete configuration. Client secrets and Redis credentials come from the host's configuration provider or environment, never from browser code. The example expects `OidcProxy__Oidc__ClientSecret` and `ConnectionStrings__Redis` to be supplied externally.
+See [the React + Vite host](samples/MonixOneBff.Host/README.md) and [migration notes](docs/MIGRATION-6.md) for complete configuration. Client secrets and Redis credentials come from the host's configuration provider or environment, never from browser code. The example expects `OidcProxy__Oidc__ClientSecret` and `ConnectionStrings__Redis` to be supplied externally.
 
 ## Browser contract
 
@@ -73,7 +73,7 @@ Without Redis, storage is in-process with the same compare-and-set behavior; ses
 
 ## Build and verification
 
-Requires the .NET SDK pinned in `global.json` and Docker for the real Redis tests.
+Requires the .NET SDK pinned in `global.json` and Docker for the real Redis tests. The React/Vite sample uses Node.js 24.15+ and npm; run npm ci, npm test and npm run build in samples/MonixOneBff.Host/ClientApp before publishing the host.
 
 ```sh
 dotnet restore MonixOne.OidcProxy.sln

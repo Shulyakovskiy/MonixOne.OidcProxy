@@ -18,6 +18,17 @@ jobs:
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
           global-json-file: global.json
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: samples/MonixOneBff.Host/ClientApp/package-lock.json
+      - name: Install React sample
+        run: npm ci --prefix samples/MonixOneBff.Host/ClientApp
+      - name: Test React sample
+        run: npm test --prefix samples/MonixOneBff.Host/ClientApp
+      - name: Build React sample
+        run: npm run build --prefix samples/MonixOneBff.Host/ClientApp
       - name: Restore
         run: dotnet restore MonixOne.OidcProxy.sln
       - name: Build
@@ -28,3 +39,5 @@ jobs:
         run: dotnet test tests/MonixOne.OidcProxy.Tests/MonixOne.OidcProxy.Tests.csproj -c Release --no-build --filter 'FullyQualifiedName~SessionTests|FullyQualifiedName~RedisConcurrencyTests|FullyQualifiedName~IndependentHttpRequests'
       - name: Pack
         run: dotnet pack MonixOne.OidcProxy.sln -c Release --no-build -o artifacts/packages
+      - name: Publish sample with compiled SPA
+        run: dotnet publish samples/MonixOneBff.Host/MonixOneBff.Host.csproj -c Release --no-build -o artifacts/sample-host
