@@ -207,7 +207,7 @@ internal sealed class BffHost : IAsyncDisposable
     internal static async Task<BffHost> StartAsync(FakeIdentityProvider idp,
         ConnectionMultiplexer? redis = null, string? prefix = null, TestClock? clock = null,
         string project = "test-project", string environment = "test",
-        IConfigurationManager<OpenIdConnectConfiguration>? configurationManager = null)
+        IConfigurationManager<OpenIdConnectConfiguration>? configurationManager = null, bool injectForeignPrincipal = false)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions { EnvironmentName = "Testing" });
         builder.WebHost.UseTestServer();
@@ -233,6 +233,12 @@ internal sealed class BffHost : IAsyncDisposable
         });
         builder.Services.AddSingleton<IForwarderHttpClientFactory, EchoClientFactory>();
         var app = builder.Build();
+        if (injectForeignPrincipal)
+            app.Use((context, next) =>
+            {
+                context.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", "foreign-user")], "another-scheme"));
+                return next(context);
+            });
         app.UseOidcProxy();
         app.MapGet("/local", () => Results.Ok()).AsOidcProxyApi();
         await app.StartAsync();

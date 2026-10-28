@@ -53,6 +53,17 @@ public class AdditionalHttpTests
         Assert.Equal(1, idp.RefreshExchanges);
     }
 
+    [Theory]
+    [InlineData("/api/data")]
+    [InlineData("/.auth/me")]
+    [InlineData("/local")]
+    public async Task PrincipalFromAnotherHostAuthenticationSchemeCannotBypassBffSession(string path)
+    {
+        using var idp = new FakeIdentityProvider();
+        await using var host = await BffHost.StartAsync(idp, injectForeignPrincipal: true);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await new Browser(host).SendAsync(HttpMethod.Get, path)).StatusCode);
+    }
+
     private sealed class RotatingConfigurationManager(OpenIdConnectConfiguration original, Func<OpenIdConnectConfiguration> updated)
         : BaseConfigurationManager, IConfigurationManager<OpenIdConnectConfiguration>
     {

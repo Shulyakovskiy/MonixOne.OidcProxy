@@ -266,6 +266,14 @@ public static class ModuleInitializer
                 context.Response.StatusCode = StatusCodes.Status403Forbidden;
                 return;
             }
+            // A principal established by another host middleware/scheme is not a BFF session.
+            var authentication = await context.AuthenticateAsync(BffConstants.CookieScheme);
+            context.User = authentication.Principal ?? new ClaimsPrincipal(new ClaimsIdentity());
+            if (context.Items.ContainsKey(typeof(SessionUnavailableException)))
+            {
+                context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                return;
+            }
             var hasCsrfHeader = context.Request.Headers["X-CSRF"].Count == 1 && context.Request.Headers["X-CSRF"] == "1";
             if (!hasCsrfHeader)
             {
@@ -285,9 +293,9 @@ public static class ModuleInitializer
                     return;
                 }
             }
-            if (context.Items.ContainsKey(typeof(SessionUnavailableException)))
+            if (!authentication.Succeeded)
             {
-                context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
                 return;
             }
             try
