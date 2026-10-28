@@ -2,26 +2,29 @@ name: CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [main, 'codex/**']
   pull_request:
-    branches: [ "main" ]
+    branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
-  build:
+  verify:
     runs-on: ubuntu-latest
-
+    timeout-minutes: 15
     steps:
-    - uses: actions/checkout@v3
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v3
-      with:
-        dotnet-version: 8.0.x
-
-    - uses: actions/checkout@v3
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v3
-      with:
-        dotnet-version: 9.0.x
-
-    - name: Run unit tests
-      run: dotnet test --filter 'FullyQualifiedName~.UnitTests'
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          global-json-file: global.json
+      - name: Restore
+        run: dotnet restore MonixOne.OidcProxy.sln
+      - name: Build
+        run: dotnet build MonixOne.OidcProxy.sln -c Release --no-restore
+      - name: OIDC, concurrency and real Redis tests
+        run: dotnet test MonixOne.OidcProxy.sln -c Release --no-build --logger trx --collect:'XPlat Code Coverage'
+      - name: Repeat concurrency tests
+        run: dotnet test tests/MonixOne.OidcProxy.Tests/MonixOne.OidcProxy.Tests.csproj -c Release --no-build --filter 'FullyQualifiedName~SessionTests|FullyQualifiedName~RedisConcurrencyTests|FullyQualifiedName~IndependentHttpRequests'
+      - name: Pack
+        run: dotnet pack MonixOne.OidcProxy.sln -c Release --no-build -o artifacts/packages

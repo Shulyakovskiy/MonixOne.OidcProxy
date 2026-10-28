@@ -451,3 +451,7 @@ $RECYCLE.BIN/
 
 # Specflow
 *.feature.cs
+# React/Vite sample build outputs
+samples/**/ClientApp/node_modules/
+samples/**/ClientApp/coverage/
+samples/**/wwwroot/
