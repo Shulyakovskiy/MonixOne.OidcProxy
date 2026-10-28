@@ -44,6 +44,8 @@ See [the React + Vite host](samples/MonixOneBff.Host/README.md) and [migration n
 
 ## Browser contract
 
+For an existing YARP gateway and BR.Identity, see [integration and compatibility](docs/INTEGRATION.md). Place the BFF in a browser YARP host with Identity as its external OIDC provider. Shared gateways can opt into ProtectOnlyMarkedRoutes and keep their Bearer/M2M routes.
+
 - Navigate to `GET /.auth/login` to start OIDC. Register the exact public HTTPS callback `/.auth/login/callback` on a **confidential** Identity client.
 - Send `X-CSRF: 1` on every proxy/API call, including GET, and on `GET /.auth/me`. Cookies are sent to the BFF origin. No access or refresh token is returned to JavaScript.
 - `POST /.auth/end-session` accepts the CSRF header or a validated ASP.NET Core antiforgery form token and ends the local server session before best-effort refresh-token revocation and OIDC logout. GET logout returns 405. For top-level browser navigation, fetch `GET /.auth/antiforgery` with X-CSRF: 1, then submit a native POST form using its requestToken/formFieldName; this follows the Identity logout redirect without cross-origin fetch.

@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Antiforgery;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Http;
@@ -12,9 +13,14 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
+using CookieHeaderValue = Microsoft.Net.Http.Headers.CookieHeaderValue;
+using SetCookieHeaderValue = Microsoft.Net.Http.Headers.SetCookieHeaderValue;
 using MonixOne.OidcProxy.Sessions;
 using StackExchange.Redis;
+using Yarp.ReverseProxy;
 using Yarp.ReverseProxy.Transforms;
+using Yarp.ReverseProxy.Configuration;
+using Yarp.ReverseProxy.Model;
 
 namespace MonixOne.OidcProxy.ModuleInitializers;
 
@@ -37,7 +43,8 @@ public static class ModuleInitializer
         if (options.Redis is not null)
             protection.PersistKeysToStackExchangeRedis(options.Redis, options.RedisKeyPrefix + "data-protection");
 
-        services.AddAuthorization();
+        services.AddAuthorization(authorization => authorization.AddPolicy(BffConstants.AuthorizationPolicy,
+            policy => policy.RequireAuthenticatedUser()));
         services.AddAntiforgery(antiforgery =>
         {
             antiforgery.Cookie.Name = options.CookieName + ".csrf";
@@ -46,7 +53,7 @@ public static class ModuleInitializer
             antiforgery.Cookie.SecurePolicy = CookieSecurePolicy.Always;
             antiforgery.Cookie.SameSite = SameSiteMode.Lax;
         });
-        services.AddAuthentication(BffConstants.CookieScheme)
+        services.AddAuthentication()
             .AddCookie(BffConstants.CookieScheme, cookie =>
             {
                 cookie.Cookie.Name = options.CookieName;
@@ -117,10 +124,29 @@ public static class ModuleInitializer
 
         if (options.Mode != Mode.AuthenticateOnly)
         {
-            var yarp = services.AddReverseProxy().AddTransforms(builder =>
+            // YARP 2.3 registers some policies more than once if AddReverseProxy is
+            // repeated. Reuse an existing gateway registration and its providers.
+            IReverseProxyBuilder yarp = services.Any(d => d.ServiceType == typeof(IProxyStateLookup))
+                ? new ExistingYarpBuilder(services) : services.AddReverseProxy();
+            yarp.AddTransforms(builder =>
             {
+                var isBff = IsBffRoute(builder.Route, options);
                 builder.AddRequestTransform(context =>
                 {
+                    if (!isBff)
+                    {
+                        if (context.ProxyRequest.Headers.TryGetValues("Cookie", out var values))
+                        {
+                            context.ProxyRequest.Headers.Remove("Cookie");
+                            if (CookieHeaderValue.TryParseList(values.ToList(), out var cookies))
+                            {
+                                var kept = cookies.Where(c => !IsBffCookie(c.Name.ToString(), options.CookieName)).ToArray();
+                                if (kept.Length > 0)
+                                    context.ProxyRequest.Headers.TryAddWithoutValidation("Cookie", string.Join("; ", kept.Select(c => c.ToString())));
+                            }
+                        }
+                        return ValueTask.CompletedTask;
+                    }
                     context.ProxyRequest.Headers.Remove("Cookie");
                     context.ProxyRequest.Headers.Authorization = null;
                     var ticket = context.HttpContext.Items[BffConstants.TicketItem] as AuthenticationTicket;
@@ -132,7 +158,15 @@ public static class ModuleInitializer
                 builder.AddResponseTransform(context =>
                 {
                     // Downstream services cannot create or replace a BFF session cookie.
-                    context.HttpContext.Response.Headers.Remove("Set-Cookie");
+                    var headers = context.HttpContext.Response.Headers;
+                    if (isBff) headers.Remove("Set-Cookie");
+                    else if (headers.TryGetValue("Set-Cookie", out var values))
+                    {
+                        headers.Remove("Set-Cookie");
+                        if (SetCookieHeaderValue.TryParseList(values.Select(v => v!).ToList(), out var cookies))
+                            foreach (var cookie in cookies.Where(c => !IsBffCookie(c.Name.ToString(), options.CookieName)))
+                                headers.Append("Set-Cookie", cookie.ToString());
+                    }
                     return ValueTask.CompletedTask;
                 });
             });
@@ -178,6 +212,7 @@ public static class ModuleInitializer
         };
         oidc.Events.OnRedirectToIdentityProviderForSignOut = context =>
         {
+            context.ProtocolMessage.ClientId = oidc.ClientId;
             context.ProtocolMessage.PostLogoutRedirectUri = new Uri(options.PublicOrigin!, oidc.SignedOutCallbackPath).AbsoluteUri;
             context.ProtocolMessage.IdTokenHint = context.HttpContext.Items[BffConstants.LogoutIdTokenItem] as string;
             return Task.CompletedTask;
@@ -314,6 +349,13 @@ public static class ModuleInitializer
                     context.Items[BffConstants.TicketItem] = ticket;
                     context.User = WithSessionId(ticket.Principal, id);
                 }
+                // Authorization must use this BFF session and its refreshed claims rather than
+                // a cached result from the host's default Bearer/Identity authentication scheme.
+                context.Features.Set<IAuthenticateResultFeature>(new BffAuthenticateResultFeature
+                {
+                    AuthenticateResult = AuthenticateResult.Success(new AuthenticationTicket(
+                        context.User, authentication.Properties!, BffConstants.CookieScheme))
+                });
                 await next(context);
             }
             catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
@@ -343,18 +385,18 @@ public static class ModuleInitializer
                 path = requested[0]!;
             }
             return Results.Challenge(new AuthenticationProperties { RedirectUri = path }, [BffConstants.OidcScheme]);
-        });
+        }).AllowAnonymous();
 
         app.MapGet($"/{options.EndpointName}/me", (HttpContext context) =>
             Results.Json(context.User.Claims.Where(c => c.Type != BffConstants.SessionClaim)
                 .GroupBy(c => c.Type).ToDictionary(g => g.Key, g => g.Select(c => c.Value).ToArray())))
-            .RequireAuthorization().WithMetadata(BffConstants.ApiMetadata);
+            .AsOidcProxyApi();
 
         app.MapGet($"/{options.EndpointName}/antiforgery", (HttpContext context, IAntiforgery antiforgery) =>
         {
             var tokens = antiforgery.GetAndStoreTokens(context);
             return Results.Json(new { tokens.RequestToken, tokens.FormFieldName });
-        }).RequireAuthorization().WithMetadata(BffConstants.ApiMetadata);
+        }).AsOidcProxyApi();
 
         app.MapPost($"/{options.EndpointName}/end-session", async (HttpContext context, SessionStore store, TokenSession tokens) =>
         {
@@ -368,11 +410,33 @@ public static class ModuleInitializer
                 await tokens.RevokeAsync(ticket, CancellationToken.None);
             }
             return Results.SignOut(new AuthenticationProperties { RedirectUri = options.LandingPage }, [BffConstants.OidcScheme]);
-        }).RequireAuthorization().WithMetadata(BffConstants.ApiMetadata);
+        }).AsOidcProxyApi();
 
         if (options.Mode != Mode.AuthenticateOnly)
-            app.MapReverseProxy().RequireAuthorization().WithMetadata(BffConstants.ApiMetadata);
+            app.MapReverseProxy().Add(endpoint =>
+            {
+                var route = endpoint.Metadata.OfType<RouteModel>().Single().Config;
+                if (!IsBffRoute(route, options)) return;
+                endpoint.Metadata.Add(new AuthorizeAttribute(BffConstants.AuthorizationPolicy));
+                endpoint.Metadata.Add(BffConstants.ApiMetadata);
+            });
         return app;
+    }
+
+    private static bool IsBffRoute(RouteConfig route, ProxyOptions options)
+    {
+        if (!options.ProtectOnlyMarkedRoutes) return true;
+        if (route.Metadata?.TryGetValue(ProxyOptions.BffRouteMetadataKey, out var value) != true) return false;
+        return bool.TryParse(value, out var enabled) ? enabled
+            : throw new ArgumentException($"Route '{route.RouteId}' has an invalid {ProxyOptions.BffRouteMetadataKey} value; use true or false.");
+    }
+
+    private static bool IsBffCookie(string name, string cookieName)
+    {
+        if (name == cookieName || name == cookieName + ".csrf") return true;
+        var chunkPrefix = cookieName + "C";
+        return name.StartsWith(chunkPrefix, StringComparison.Ordinal) && name.Length > chunkPrefix.Length &&
+               name.AsSpan(chunkPrefix.Length).IndexOfAnyExceptInRange('0', '9') < 0;
     }
 
     private static ClaimsPrincipal WithSessionId(ClaimsPrincipal principal, string id)
@@ -383,5 +447,15 @@ public static class ModuleInitializer
     }
 
     public static TBuilder AsOidcProxyApi<TBuilder>(this TBuilder builder) where TBuilder : IEndpointConventionBuilder
-        => builder.RequireAuthorization().WithMetadata(BffConstants.ApiMetadata);
+        => builder.RequireAuthorization(BffConstants.AuthorizationPolicy).WithMetadata(BffConstants.ApiMetadata);
+}
+
+internal sealed class BffAuthenticateResultFeature : IAuthenticateResultFeature
+{
+    public AuthenticateResult? AuthenticateResult { get; set; }
+}
+
+internal sealed class ExistingYarpBuilder(IServiceCollection services) : IReverseProxyBuilder
+{
+    public IServiceCollection Services { get; } = services;
 }

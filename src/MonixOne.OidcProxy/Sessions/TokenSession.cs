@@ -135,6 +135,7 @@ internal sealed class TokenSession(SessionStore store, ProxyOptions options,
             Address = configuration.TokenEndpoint!,
             ClientId = oidc.ClientId!,
             ClientSecret = oidc.ClientSecret,
+            ClientCredentialStyle = ClientCredentialStyle.PostBody,
             RefreshToken = refreshToken
         }, ct);
         if (response.IsError)
@@ -251,6 +252,7 @@ internal sealed class TokenSession(SessionStore store, ProxyOptions options,
                 Address = endpoint,
                 ClientId = oidc.ClientId!,
                 ClientSecret = oidc.ClientSecret,
+                ClientCredentialStyle = ClientCredentialStyle.PostBody,
                 Token = token,
                 TokenTypeHint = "refresh_token"
             }, timeout.Token);

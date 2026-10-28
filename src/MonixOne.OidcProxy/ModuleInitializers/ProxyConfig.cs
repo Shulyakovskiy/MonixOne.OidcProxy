@@ -5,6 +5,7 @@ namespace MonixOne.OidcProxy;
 public class ProxyConfig
 {
     public Mode Mode { get; set; }
+    public bool ProtectOnlyMarkedRoutes { get; set; }
     public string EndpointName { get; set; } = ".auth";
     public string? LandingPage { get; set; }
     public string? NameClaim { get; set; }
@@ -20,6 +21,7 @@ public class ProxyConfig
     public virtual void Apply(ProxyOptions options)
     {
         options.Mode = Mode;
+        options.ProtectOnlyMarkedRoutes = ProtectOnlyMarkedRoutes;
         options.EndpointName = EndpointName;
         options.EnableUserPreferredLandingPages = EnableUserPreferredLandingPages;
         options.SetAllowedLandingPages(AllowedLandingPages);

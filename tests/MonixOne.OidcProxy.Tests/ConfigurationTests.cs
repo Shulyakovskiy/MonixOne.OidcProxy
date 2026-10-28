@@ -8,6 +8,23 @@ namespace MonixOne.OidcProxy.Tests;
 
 public class ConfigurationTests
 {
+    [Fact]
+    public void DictionaryConfigurationPreservesTheCompleteYarpRouteContract()
+    {
+        var route = new Yarp.ReverseProxy.Configuration.RouteConfig
+        {
+            RouteId = "replaced-by-dictionary-key", ClusterId = "api", Match = new() { Path = "/api/{**all}" },
+            RateLimiterPolicy = "per-user", OutputCachePolicy = "disabled", TimeoutPolicy = "short-requests",
+            AuthorizationPolicy = "scope-policy", CorsPolicy = "disabled", MaxRequestBodySize = 1024,
+            Metadata = new Dictionary<string, string> { [ProxyOptions.BffRouteMetadataKey] = "true" }
+        };
+        var configured = new Dictionary<string, Yarp.ReverseProxy.Configuration.RouteConfig> { ["api"] = route }.ToRouteConfig();
+        Assert.Equal(route with { RouteId = "api" }, Assert.Single(configured));
+        var timed = route with { TimeoutPolicy = null, Timeout = TimeSpan.FromSeconds(15) };
+        Assert.Equal(timed with { RouteId = "api" }, Assert.Single(
+            new Dictionary<string, Yarp.ReverseProxy.Configuration.RouteConfig> { ["api"] = timed }.ToRouteConfig()));
+    }
+
     [Theory]
     [InlineData("http://app.example")]
     [InlineData("https://user:password@app.example")]

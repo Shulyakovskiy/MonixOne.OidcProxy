@@ -33,10 +33,10 @@ jobs:
         run: dotnet restore MonixOne.OidcProxy.sln
       - name: Build
         run: dotnet build MonixOne.OidcProxy.sln -c Release --no-restore
-      - name: OIDC, concurrency and real Redis tests
+      - name: OIDC, YARP, OpenIddict/PostgreSQL and real Redis tests
         run: dotnet test MonixOne.OidcProxy.sln -c Release --no-build --logger trx --collect:'XPlat Code Coverage'
-      - name: Repeat concurrency tests
-        run: dotnet test tests/MonixOne.OidcProxy.Tests/MonixOne.OidcProxy.Tests.csproj -c Release --no-build --filter 'FullyQualifiedName~SessionTests|FullyQualifiedName~RedisConcurrencyTests|FullyQualifiedName~IndependentHttpRequests'
+      - name: Repeat concurrency and interoperability tests
+        run: dotnet test tests/MonixOne.OidcProxy.Tests/MonixOne.OidcProxy.Tests.csproj -c Release --no-build --filter 'FullyQualifiedName~SessionTests|FullyQualifiedName~RedisConcurrencyTests|FullyQualifiedName~IndependentHttpRequests|FullyQualifiedName~GatewayCompatibilityTests|FullyQualifiedName~OpenIddictCompatibilityTests'
       - name: Pack
         run: dotnet pack MonixOne.OidcProxy.sln -c Release --no-build -o artifacts/packages
       - name: Publish sample with compiled SPA

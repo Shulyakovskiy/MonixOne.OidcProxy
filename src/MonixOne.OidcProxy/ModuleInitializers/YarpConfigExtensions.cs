@@ -14,32 +14,11 @@ public static class YarpConfigExtensions
     
     private static RouteConfig ToRouteConfig(this KeyValuePair<string, RouteConfig> source)
     {
-        return new RouteConfig
-        {
-            RouteId = source.Key,
-            Match = source.Value.Match,
-            Order = source.Value.Order,
-            ClusterId = source.Value.ClusterId,
-            AuthorizationPolicy = source.Value.AuthorizationPolicy,
-            CorsPolicy = source.Value.CorsPolicy,
-            MaxRequestBodySize = source.Value.MaxRequestBodySize,
-            Metadata = source.Value.Metadata,
-            Transforms = source.Value.Transforms
-        };
+        return source.Value with { RouteId = source.Key };
     }
     
     public static ClusterConfig ToClusterConfig(this KeyValuePair<string, ClusterConfig> source)
     {
-        return new ClusterConfig
-        {
-            ClusterId = source.Key,
-            LoadBalancingPolicy = source.Value.LoadBalancingPolicy,
-            SessionAffinity = source.Value.SessionAffinity,
-            HealthCheck = source.Value.HealthCheck,
-            HttpClient = source.Value.HttpClient,
-            HttpRequest = source.Value.HttpRequest,
-            Destinations = source.Value.Destinations,
-            Metadata = source.Value.Metadata
-        };
+        return source.Value with { ClusterId = source.Key };
     }
 }

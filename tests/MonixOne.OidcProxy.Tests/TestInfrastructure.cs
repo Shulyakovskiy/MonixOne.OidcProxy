@@ -48,6 +48,7 @@ internal sealed class FakeIdentityProvider : HttpMessageHandler
     internal bool OmitRefreshToken;
     internal bool OmitIdToken;
     internal string? InvalidIdToken;
+    internal string Role = "manager";
     internal TaskCompletionSource RefreshStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     internal TaskCompletionSource? RefreshRelease;
     internal string LastAccessToken = string.Empty;
@@ -157,7 +158,7 @@ internal sealed class FakeIdentityProvider : HttpMessageHandler
         var claims = new List<Claim>
         {
             new("sub", InvalidIdToken == "subject" ? "another-user" : "user-1"),
-            new("name", "Test User"), new("role", "manager")
+            new("name", "Test User"), new("role", Role)
         };
         if (InvalidIdToken == "missing_subject") claims.RemoveAll(c => c.Type == "sub");
         if (InvalidIdToken == "azp") claims.Add(new Claim("azp", "attacker-client"));
@@ -196,7 +197,7 @@ internal sealed class BffHost : IAsyncDisposable
     internal SessionStore Store => App.Services.GetRequiredService<SessionStore>();
     internal TokenSession Tokens => App.Services.GetRequiredService<TokenSession>();
 
-    private BffHost(WebApplication app, TestClock clock)
+    internal BffHost(WebApplication app, TestClock clock)
     {
         App = app;
         Clock = clock;

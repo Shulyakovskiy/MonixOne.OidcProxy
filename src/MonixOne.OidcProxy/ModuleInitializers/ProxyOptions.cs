@@ -7,6 +7,16 @@ namespace MonixOne.OidcProxy.ModuleInitializers;
 
 public sealed class ProxyOptions
 {
+    /// <summary>
+    /// Route metadata key whose boolean value selects BFF routes in a shared gateway.
+    /// </summary>
+    public const string BffRouteMetadataKey = "MonixOne.OidcProxy.Bff";
+
+    /// <summary>
+    /// Protects only explicitly marked proxy routes. The default protects all proxy
+    /// routes; local endpoints marked with AsOidcProxyApi are always protected.
+    /// </summary>
+    public bool ProtectOnlyMarkedRoutes { get; set; }
     public string EndpointName { get; set; } = ".auth";
     public string CookieName { get; set; } = "__Host-oidcproxy.session";
     public string NameClaim { get; set; } = "name";

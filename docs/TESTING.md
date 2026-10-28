@@ -28,6 +28,17 @@ The suite runs on .NET 10 LTS. Docker is required; Redis tests use an isolated `
 
 The malicious local-redirect regression corpus from upstream is retained. Wrapper tests verify Auth0 and tenant-specific Entra configuration; live external tenants and a specific BR.Identity deployment are not simulated as successful integrations.
 
+## Existing gateway and Identity compatibility
+
+- Existing YARP registration/configuration providers coexist without duplicate health-check policies.
+- The host's real JWT Bearer default scheme and DefaultPolicy/FallbackPolicy remain intact; BFF endpoints use their own cookie and policy. Role authorization sees refreshed claims.
+- Explicit BFF routes, ordinary Bearer/M2M routes and anonymous routes coexist. BFF cookies cannot leak into unmarked downstream requests or be overwritten through downstream responses. Runtime route reload updates protection and token transforms together.
+- Dictionary configuration retains YARP rate-limit, timeout and output-cache settings.
+- Real OpenIddict 7.7.2 with disposable PostgreSQL verifies discovery/JWKS, code/PKCE, access-vs-ID-token audiences and claim destinations, concurrent rotating refresh, rejection of redeemed refresh tokens, revocation, native form/header logout and client_id tenant selection.
+- The actual server rejects a public SPA client used as a confidential BFF and obsolete service scopes. Missing Identity browser session remains a 401 requiring login UI/continuation.
+
+The OpenIddict fixture is a protocol integration test, not a live BR.Identity deployment or a copy of its application/business handlers. See [integration constraints](INTEGRATION.md).
+
 Run all tests with `dotnet test MonixOne.OidcProxy.sln -c Release`. Repeat concurrency tests with:
 
 ```sh
@@ -35,6 +46,8 @@ dotnet test tests/MonixOne.OidcProxy.Tests/MonixOne.OidcProxy.Tests.csproj -c Re
 ```
 
 A finite suite is not proof that every possible deployment/failure is covered. In particular, asynchronous Redis failover can lose acknowledged state; the identity provider and Redis do not participate in a distributed transaction. See README for the explicit guarantees and deployment limits.
+
+OpenIddict compatibility tests additionally require Docker for `postgres:17-alpine`. OpenIddict, EF Core/Npgsql, PostgreSQL Testcontainers and JWT Bearer references are test-only and are not included in the runtime NuGet dependencies.
 
 ## React/Vite browser client
 
@@ -49,3 +62,5 @@ ClientApp has focused Vitest/Testing Library tests for the BFF request contract,
 - NuGet vulnerability audit including transitive dependencies and npm audit reported no known vulnerabilities at the time of this run.
 
 These are local verification results. A live identity-provider deployment, Redis failover topology and external CI must be checked separately.
+
+The subsequent compatibility revision on the same date passed **389 tests, zero skipped**, plus a separate repeat of **58 session/concurrency/interoperability tests**, with a zero-warning Release build, package inspection and sample publish. The new tests use real OpenIddict/PostgreSQL and existing YARP/JWT middleware; live deployment caveats above still apply.

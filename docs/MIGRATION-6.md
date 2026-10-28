@@ -4,6 +4,10 @@ Version 6 is a deliberate security/API migration and requires .NET 10 LTS. Packa
 
 `AddOidcProxy(config, options => ...)` and `UseOidcProxy()` remain the primary integration shape. The public origin is now mandatory and HTTPS only. Configure a confidential authorization-code client with PKCE, offline_access, exact callback and logout redirect URIs. Preserve separate clients/scopes/tenants for independent applications. `web-app`/`lkb-web` public clients must not be given a server secret in the SPA; register separate confidential BFF clients.
 
+The package preserves the host's authentication defaults and authorization DefaultPolicy/FallbackPolicy. BFF endpoints explicitly authenticate their own cookie and use a separate authorization policy. For an existing shared YARP gateway, register AddReverseProxy before AddOidcProxy and enable ProtectOnlyMarkedRoutes; mark browser routes with Metadata["MonixOne.OidcProxy.Bff"]="true". UseOidcProxy maps YARP once, so remove a separate MapReverseProxy call. See [integration and compatibility](INTEGRATION.md).
+
+Code exchange, refresh and revocation use client_secret_post. Logout includes client_id so Identity can select the tenant without its browser cookie. The identity provider must support client_secret_post; client_secret_basic-only providers need a separately implemented and tested client-authentication strategy.
+
 Redis is a host-owned ConnectionMultiplexer supplied through `ConfigureRedisBackBone(connection, projectName, environmentName, keyNamespace)`. All three scope segments participate in both session keys and Data Protection isolation. Never share a scope between different clients or environments.
 
 The manual IIdentityProvider, JWT parser/signature-validator, encryption-key, redirect-factory and authentication-callback abstractions have been removed. Protocol validation now belongs to ASP.NET Core and Microsoft.IdentityModel. Use standard OpenIdConnectOptions/OnTokenValidated for application claim customization; session creation and security invariants belong to this library. Do not weaken signature, issuer, audience, nonce or PKCE requirements in custom application code.
