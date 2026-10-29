@@ -19,8 +19,12 @@ public sealed class GatewayCompositionTests(InfrastructureFixture infrastructure
         native.Given(Request.Create().WithPath("/legacy/status").UsingGet())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("native-upstream"));
         await using var host = identity.CreateBff();
-        host.ConfigureClusters = clusters => clusters.Add(new() { ClusterId = "native", Destinations = new Dictionary<string, DestinationConfig>
-            { ["primary"] = new() { Address = native.Urls[0] } } });
+        host.ConfigureClusters = clusters => clusters.Add(new()
+        {
+            ClusterId = "native",
+            Destinations = new Dictionary<string, DestinationConfig>
+            { ["primary"] = new() { Address = native.Urls[0] } }
+        });
         host.ConfigureRoutes = routes => routes.Add(new() { RouteId = "native", ClusterId = "native", Match = new() { Hosts = ["native.example"], Path = "/legacy/{**path}" } });
         using var browser = host.CreateBrowser();
 

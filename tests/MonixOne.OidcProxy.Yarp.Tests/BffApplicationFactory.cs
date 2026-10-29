@@ -102,11 +102,19 @@ public sealed class BffApplicationFactory(InfrastructureFixture infrastructure, 
                     };
                 });
                 services.Configure<CookieAuthenticationOptions>(OidcProxyDefaults.CookieScheme(client.Name), options => options.TimeProvider = Clock);
-                routes.Add(new RouteConfig { RouteId = client.Name, ClusterId = client.Name,
+                routes.Add(new RouteConfig
+                {
+                    RouteId = client.Name,
+                    ClusterId = client.Name,
                     Match = new() { Path = "/api/{**all}", Hosts = [client.Origin.Authority] },
-                    Metadata = new Dictionary<string, string> { [OidcProxyDefaults.ClientMetadataKey] = client.Name } });
-                clusters.Add(new ClusterConfig { ClusterId = client.Name, Destinations = new Dictionary<string, DestinationConfig>
-                    { ["primary"] = new() { Address = client.Backend.AbsoluteUri } } });
+                    Metadata = new Dictionary<string, string> { [OidcProxyDefaults.ClientMetadataKey] = client.Name }
+                });
+                clusters.Add(new ClusterConfig
+                {
+                    ClusterId = client.Name,
+                    Destinations = new Dictionary<string, DestinationConfig>
+                    { ["primary"] = new() { Address = client.Backend.AbsoluteUri } }
+                });
             }
             ConfigureRoutes?.Invoke(routes);
             ConfigureClusters?.Invoke(clusters);

@@ -31,7 +31,9 @@ public sealed class PreparedConfigurationTests(InfrastructureFixture infrastruct
         await using var host = new PreparedHost(infrastructure, identity);
         using var browser = host.CreateClient(new WebApplicationFactoryClientOptions
         {
-            BaseAddress = new Uri("https://admin-dev.intra-beetroute.ru"), AllowAutoRedirect = false, HandleCookies = true
+            BaseAddress = new Uri("https://admin-dev.intra-beetroute.ru"),
+            AllowAutoRedirect = false,
+            HandleCookies = true
         });
         using var provider = identity.CreateIdentityBrowser();
 

@@ -146,6 +146,7 @@ Unit/integration tests не заменяют это окружение и инф
 ## Package и supply chain
 
 ```sh
+dotnet format whitespace MonixOne.OidcProxy.Yarp.sln --verify-no-changes
 dotnet format style MonixOne.OidcProxy.Yarp.sln --diagnostics IDE0005 --verify-no-changes
 dotnet list MonixOne.OidcProxy.Yarp.sln package --vulnerable --include-transitive
 dotnet pack src/MonixOne.OidcProxy.Yarp/MonixOne.OidcProxy.Yarp.csproj -c Release --no-build -o artifacts/nuget

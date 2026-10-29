@@ -330,17 +330,32 @@ public sealed class ApplicationCookieTests(InfrastructureFixture infrastructure)
             options.CookiePolicies["first"] = new() { ClusterId = "api", Names = ["state"], Path = "/" };
             options.CookiePolicies["second"] = new() { ClusterId = "second", Names = ["state"], Path = "/" };
         };
-        host.ConfigureClusters = clusters => clusters.Add(new() { ClusterId = "second", Destinations = new Dictionary<string, DestinationConfig>
-            { ["primary"] = new() { Address = other.Origin.AbsoluteUri } } });
+        host.ConfigureClusters = clusters => clusters.Add(new()
+        {
+            ClusterId = "second",
+            Destinations = new Dictionary<string, DestinationConfig>
+            { ["primary"] = new() { Address = other.Origin.AbsoluteUri } }
+        });
         host.ConfigureRoutes = routes =>
         {
             foreach (var label in new[] { "first", "second" })
             {
                 var metadata = new Dictionary<string, string> { [OidcProxyDefaults.ClientMetadataKey] = "spa", [OidcProxyDefaults.CookiePolicyMetadataKey] = label };
-                routes.Add(routes[0] with { RouteId = label + "-start", ClusterId = label == "first" ? "api" : "second", Metadata = metadata,
-                    Match = routes[0].Match with { Path = "/" + label + "/start", Methods = ["POST"] } });
-                routes.Add(routes[0] with { RouteId = label + "-callback", ClusterId = label == "first" ? "api" : "second", Metadata = metadata,
-                    AuthorizationPolicy = "anonymous", Match = routes[0].Match with { Path = "/" + label + "/callback", Methods = ["GET"] } });
+                routes.Add(routes[0] with
+                {
+                    RouteId = label + "-start",
+                    ClusterId = label == "first" ? "api" : "second",
+                    Metadata = metadata,
+                    Match = routes[0].Match with { Path = "/" + label + "/start", Methods = ["POST"] }
+                });
+                routes.Add(routes[0] with
+                {
+                    RouteId = label + "-callback",
+                    ClusterId = label == "first" ? "api" : "second",
+                    Metadata = metadata,
+                    AuthorizationPolicy = "anonymous",
+                    Match = routes[0].Match with { Path = "/" + label + "/callback", Methods = ["GET"] }
+                });
             }
         };
         using var browser = host.CreateBrowser();
@@ -451,7 +466,11 @@ public sealed class ApplicationCookieTests(InfrastructureFixture infrastructure)
         host.PathBase = "/admin";
         host.ConfigureClientOptions = options => options.CookiePolicies["calendar-google"] = new OidcProxyCookiePolicy
         {
-            ClusterId = "api", Names = names ?? [StateCookie], Path = path, SameSite = sameSite, MaxAge = TimeSpan.FromMinutes(10)
+            ClusterId = "api",
+            Names = names ?? [StateCookie],
+            Path = path,
+            SameSite = sameSite,
+            MaxAge = TimeSpan.FromMinutes(10)
         };
         host.ConfigureRoutes = routes =>
         {

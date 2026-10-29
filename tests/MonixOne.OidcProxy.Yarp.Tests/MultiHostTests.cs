@@ -59,7 +59,8 @@ public sealed class MultiHostTests(InfrastructureFixture infrastructure)
         await using var host = identity.CreateBff();
         host.ConfigureRoutes = routes => routes.Add(routes[0] with
         {
-            RouteId = "unmanaged", Metadata = null,
+            RouteId = "unmanaged",
+            Metadata = null,
             Match = routes[0].Match with { Hosts = ["other-service.example"] }
         });
         using var browser = host.CreateBrowser(handleCookies: false);
