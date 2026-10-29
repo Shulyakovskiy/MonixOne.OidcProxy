@@ -144,6 +144,10 @@ internal static class OidcAuthentication
         var tokenResponse = oidc.Events.OnTokenResponseReceived;
         oidc.Events.OnTokenResponseReceived = async context =>
         {
+            // The provider has already issued credentials. Retain the known refresh
+            // token only for this request so a later protocol failure can revoke it.
+            if (!string.IsNullOrEmpty(context.TokenEndpointResponse.RefreshToken))
+                context.HttpContext.Items[BffConstants.SignInRefreshTokenItem] = context.TokenEndpointResponse.RefreshToken;
             await tokenResponse(context);
             if (string.IsNullOrWhiteSpace(context.TokenEndpointResponse.AccessToken) ||
                 !string.Equals(context.TokenEndpointResponse.TokenType, "Bearer", StringComparison.OrdinalIgnoreCase) ||
@@ -160,6 +164,8 @@ internal static class OidcAuthentication
             properties.Items.TryGetValue(BffConstants.PreviousSession, out var previousId);
             properties.Items.Remove(BffConstants.PreviousSession);
             var fullTicket = new AuthenticationTicket(context.Principal!, properties, OidcProxyDefaults.CookieScheme(name));
+            // From here the ticket creation/cleanup block owns these credentials.
+            context.HttpContext.Items.Remove(BffConstants.SignInRefreshTokenItem);
             string? id = null;
             try
             {
@@ -196,9 +202,14 @@ internal static class OidcAuthentication
             }
         };
 
-        oidc.Events.OnRemoteFailure = context =>
+        oidc.Events.OnRemoteFailure = async context =>
         {
             context.HandleResponse();
+            if (context.HttpContext.Items.Remove(BffConstants.SignInRefreshTokenItem, out var issued) && issued is string refreshToken)
+            {
+                await context.HttpContext.RequestServices.GetRequiredKeyedService<TokenSession>(name)
+                    .RevokeAsync(refreshToken, CancellationToken.None);
+            }
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
             for (var failure = context.Failure; failure is not null; failure = failure.InnerException)
                 if (failure is RedisException or RedisTimeoutException or SessionUnavailableException)
@@ -209,7 +220,6 @@ internal static class OidcAuthentication
             context.Response.Headers.CacheControl = "no-store";
             context.HttpContext.RequestServices.GetRequiredService<ILoggerFactory>()
                 .CreateLogger("MonixOne.OidcProxy.Yarp.Oidc").LogWarning("OIDC sign-in failed. Failure type: {FailureType}", context.Failure?.GetType().Name);
-            return Task.CompletedTask;
         };
     }
 

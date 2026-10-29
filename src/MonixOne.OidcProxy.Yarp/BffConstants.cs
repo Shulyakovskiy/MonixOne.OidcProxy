@@ -8,6 +8,7 @@ internal static class BffConstants
     internal const string AuthorizationPolicy = "MonixOne.OidcProxy.Yarp.Session";
     internal const string SessionClaim = "oidcproxy:session";
     internal static readonly object ApiMetadata = new();
+    internal static readonly object SignInRefreshTokenItem = new();
     internal static readonly object TicketItem = new();
     internal static readonly object LogoutIdTokenItem = new();
 }

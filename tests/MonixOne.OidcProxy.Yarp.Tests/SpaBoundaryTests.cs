@@ -115,7 +115,34 @@ public sealed class SpaBoundaryTests(InfrastructureFixture infrastructure)
 
         // Assert
         login.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
+        identity.ActiveRefreshTokens.ShouldBe(0);
+        identity.RevokedTokens.ShouldContain(identity.LastRefreshToken);
         api.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
+        identity.BackendRequests.ShouldBeEmpty();
+    }
+
+    [Theory]
+    [InlineData("missing-access-token")]
+    [InlineData("token-type")]
+    [InlineData("expiration")]
+    public async Task Login_InvalidTokenEndpointResponse_RevokesIssuedCredentialsWithoutCreatingSession(string defect)
+    {
+        // Arrange
+        var ct = TestContext.Current.CancellationToken;
+        using var identity = new OidcWireMock(infrastructure) { InvalidTokenResponse = defect };
+        await using var host = identity.CreateBff();
+        using var browser = host.CreateBrowser();
+        using var identityBrowser = identity.CreateIdentityBrowser();
+
+        // Act
+        using var login = await browser.LoginAsync(identityBrowser);
+        using var api = await browser.ApiAsync(cancellationToken: ct);
+
+        // Assert
+        login.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
+        api.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
+        identity.ActiveRefreshTokens.ShouldBe(0);
+        identity.RevokedTokens.ShouldContain(identity.LastRefreshToken);
         identity.BackendRequests.ShouldBeEmpty();
     }
 

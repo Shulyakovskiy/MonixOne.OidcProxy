@@ -35,6 +35,7 @@ internal sealed class OidcWireMock : IDisposable
     internal int RefreshRequests;
     internal int CodeRequests;
     internal string? TokenFailure { get; set; }
+    internal string? InvalidTokenResponse { get; set; }
     internal string? InvalidIdToken { get; set; }
     internal bool EncryptIdentityTokens { get; set; }
     internal bool OmitRefreshIdentityToken { get; set; }
@@ -167,10 +168,10 @@ internal sealed class OidcWireMock : IDisposable
         _refreshTokens[LastRefreshToken] = nonce!;
         var response = Json(new
         {
-            access_token = LastAccessToken,
+            access_token = InvalidTokenResponse == "missing-access-token" ? null : LastAccessToken,
             refresh_token = refreshing && OmitRotatedRefreshToken ? null : LastRefreshToken,
-            token_type = "Bearer",
-            expires_in = 120,
+            token_type = InvalidTokenResponse == "token-type" ? "mac" : "Bearer",
+            expires_in = InvalidTokenResponse == "expiration" ? 0 : 120,
             id_token = refreshing && OmitRefreshIdentityToken ? null : CreateIdToken(nonce!)
         });
         if (refreshing)

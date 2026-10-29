@@ -225,12 +225,7 @@ internal sealed class TokenSession(SessionStore store, BffClient client,
         {
             // Successful redemption can issue a new refresh token even when subsequent
             // token validation fails. Revoke the known credential before discarding it.
-            var rejected = new AuthenticationProperties();
-            rejected.StoreTokens([new AuthenticationToken
-            {
-                Name = "refresh_token", Value = response.RefreshToken ?? refreshToken
-            }]);
-            await RevokeAsync(new AuthenticationTicket(previous.Principal, rejected, client.CookieScheme), CancellationToken.None);
+            await RevokeAsync(response.RefreshToken ?? refreshToken, CancellationToken.None);
             throw;
         }
     }
@@ -253,9 +248,11 @@ internal sealed class TokenSession(SessionStore store, BffClient client,
         }
     }
 
-    internal async Task RevokeAsync(AuthenticationTicket ticket, CancellationToken cancellationToken)
+    internal Task RevokeAsync(AuthenticationTicket ticket, CancellationToken cancellationToken)
+        => RevokeAsync(ticket.Properties.GetTokenValue("refresh_token"), cancellationToken);
+
+    internal async Task RevokeAsync(string? token, CancellationToken cancellationToken)
     {
-        var token = ticket.Properties.GetTokenValue("refresh_token");
         if (string.IsNullOrEmpty(token)) return;
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(5));
