@@ -283,6 +283,9 @@ User-management endpoints требуют роли разрешённого оп�
 `identity-service.intranet_access` предназначен M2M endpoint и здесь не запрашивается.
 
 У BFF default idle 20 минут, absolute 8 часов и session cookie.
+Idle отсчитывается от последнего принятого защищённого запроса.
+Видимая SPA с polling продолжает сессию даже без действий пользователя.
+Изменение Bff configuration требует перезапуска хоста.
 Текущий Node remember/30 дней и принудительный refresh ролей не становятся частью нового контракта автоматически.
 
 Дополнительные `profile/userLinks` из token endpoint BFF не возвращает.

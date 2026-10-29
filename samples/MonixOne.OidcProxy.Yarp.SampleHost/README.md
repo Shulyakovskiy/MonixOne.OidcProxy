@@ -95,6 +95,8 @@ Ingress должен передавать префикс до BFF; удален�
 `src/bff.ts` реализует same-origin fetch с `X-CSRF: 1`, чтение claims и native POST logout с ASP.NET antiforgery token.
 
 `src/session.ts` использует официальный `@tanstack/react-query`: focus/reconnect refetch и authenticated polling раз в 60 секунд в видимой вкладке, без автоматических retries.
+Открытая видимая вкладка продлевает idle без действий мышью или клавиатурой.
+Это контракт HTTP-активности, а не проверка присутствия человека.
 В фоне polling отключён; absolute lifetime ограничивает сервер.
 
 При 401 кэш пользователя/API очищается, показывается вход. 503 показывается как недоступность.
@@ -122,3 +124,5 @@ Session cookie, OIDC state, Redis sessions и refresh/logout изолирова�
 
 Неизвестные SPA origins и маршруты без client binding не получают чужую сессию.
 Для hot reload под PathBase дополнительно настройте Vite proxy на prefixed auth/API paths; встроенный dev proxy sample показывает корневую SPA.
+
+Секция Bff фиксируется при регистрации. Изменения клиентов, origins, путей, lifetimes и OIDC параметров требуют перезапуска.

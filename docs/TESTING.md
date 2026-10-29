@@ -23,11 +23,13 @@ dotnet test --project tests/MonixOne.OidcProxy.Yarp.Tests/MonixOne.OidcProxy.Yar
 Повтор значимых гонок и совместимости:
 
 ```sh
-dotnet test --project tests/MonixOne.OidcProxy.Yarp.Tests/MonixOne.OidcProxy.Yarp.Tests.csproj -c Release --no-build -- --filter-class 'MonixOne.OidcProxy.Yarp.Tests.Refresh*' --filter-class MonixOne.OidcProxy.Yarp.Tests.MultiHostTests --minimum-expected-tests 40
+dotnet test --project tests/MonixOne.OidcProxy.Yarp.Tests/MonixOne.OidcProxy.Yarp.Tests.csproj -c Release --no-build -- --filter-class 'MonixOne.OidcProxy.Yarp.Tests.Refresh*' --filter-class MonixOne.OidcProxy.Yarp.Tests.MultiHostTests --filter-class MonixOne.OidcProxy.Yarp.Tests.RedisMutationTests --filter-class MonixOne.OidcProxy.Yarp.Tests.SessionLifetimeTests --minimum-expected-tests 62
 ```
 
 Concurrency barriers используют TaskCompletionSource и удержание настоящего HTTP-ответа после выпуска rotating refresh token.
-Session time двигается TimeProvider; тесты не используют sleep для ожидания гонки.
+Session/protocol expiry двигаются согласованным TimeProvider.
+Тесты не используют sleep для ожидания гонки.
+В нагрузочной проверке интервал 500 мс измеряет число команд; overlap задаётся barriers.
 
 Таймауты ограничивают зависшие проверки, а не заменяют синхронизацию.
 
@@ -53,11 +55,28 @@ Session time двигается TimeProvider; тесты не использую
 - Logout во время и после refresh.
 - Native antiforgery form без ожидания refresh.
 - Invalid grant, 429, 5xx и malformed response без retry.
-- Caller cancellation после redemption.
+- Caller cancellation после redemption и остановка владельца до ответа IdP.
+
+`RefreshLoadTests`:
+
+- 100 authenticated waiters за управляемым cookie-validation barrier.
+- Один redemption и отмена одного ожидающего без отмены остальных.
+- GET-команды измеряются через INFO commandstats отдельным test-only соединением.
+- Учитываются GET внутри CAS Lua, включая проверку переиспользованного snapshot.
+- После выпуска ответа проверяются все HTTP outcomes.
+
+Чтобы вывести измерение через standalone MTP runner после сборки:
+
+```sh
+dotnet tests/MonixOne.OidcProxy.Yarp.Tests/bin/Release/net10.0/MonixOne.OidcProxy.Yarp.Tests.dll \
+  --filter-class MonixOne.OidcProxy.Yarp.Tests.RefreshLoadTests \
+  --output Detailed --show-live-output on --show-stdout All --no-ansi --progress off
+```
 
 `RefreshProtocolTests`:
 
-- Некорректный ID token и смена subject.
+- Некорректный ID token, смена subject и проверка исходного auth_time.
+- Обновлённые role claims в текущем HTTP authorization решении; штатный 403 при отказе policy.
 - Optional ID/refresh tokens и expired pending marker.
 - JWKS rollover и signed-and-encrypted ID tokens.
 
@@ -83,7 +102,24 @@ Session time двигается TimeProvider; тесты не использую
 - Нативный HTTP upstream без BFF metadata.
 - Запрет HTTP и отключённой проверки сертификата для BFF cluster.
 
-### Redis и прикладные cookies
+### Redis, lifetime и прикладные cookies
+
+`RedisMutationTests`:
+
+- RESP gate задерживает ответ после исполнения команды настоящим Redis.
+- Отключение после claim, потеря его подтверждения и проверка operation ID.
+- Запрет redemption, если запись удалена до проверки владения.
+- Неопределённый SET, cleanup отменённого callback и ограничение orphan TTL.
+- Остановка хоста во время SET с отзывом известных credentials.
+- GETDEL timeout → 503; повторного DEL после подтверждения нет.
+
+`SessionLifetimeTests`:
+
+- Точное idle продление до половины интервала и без refresh token.
+- Активность при refresh через прежнюю границу idle.
+- Absolute timeout и snapshot, истёкший после cookie validation.
+- Access tokens на 10, 30 и 120 секунд.
+- Чтение прежнего v6 record без RefreshAt.
 
 `SessionBoundaryTests`:
 
@@ -102,6 +138,7 @@ Session time двигается TimeProvider; тесты не использую
 
 `PreparedConfigurationTests` запускает фактический sample Program с документированным JSON.
 Проверяются регистрация клиента, Calendar callback cookie и Bearer forwarding.
+Дополнительно проверяется startup snapshot после изменения source и пересоздания native options.
 
 `OpenIddictFlowTests` использует настоящий OpenIddict, PostgreSQL и HTTPS resource API:
 
@@ -156,3 +193,24 @@ dotnet pack src/MonixOne.OidcProxy.Yarp/MonixOne.OidcProxy.Yarp.csproj -c Releas
 Audit отражает известные advisory feeds на момент запуска и не доказывает отсутствие неизвестных CVE.
 
 Статус upstream #373 описан в корневом README.
+
+---
+
+## Чистый архив исходников
+
+Используйте committed Git tree, а не архивирование всей рабочей папки.
+Команда исключает также случайно tracked build outputs и старые NuGet packages.
+Нужные PNG схем и package icon сохраняются.
+Незакоммиченные staged/working изменения в этот архив не входят.
+
+```sh
+mkdir -p artifacts
+git archive --format=zip --output=artifacts/source.zip HEAD -- . \
+  ':(exclude,glob)**/bin/**' ':(exclude,glob)**/obj/**' \
+  ':(exclude,glob)**/node_modules/**' ':(exclude,glob)**/dist/**' \
+  ':(exclude,glob)**/wwwroot/**' ':(exclude,glob)**/ClientApp/public/docs-assets/**' \
+  ':(exclude,glob)**/coverage/**' ':(exclude,glob)**/TestResults/**' \
+  ':(exclude,glob)artifacts/**' ':(exclude,glob)**/.vite/**' \
+  ':(exclude,glob)**/.vitest-cache/**' ':(exclude,glob)**/*.tsbuildinfo' \
+  ':(exclude,glob)**/*.nupkg' ':(exclude,glob)**/*.snupkg'
+```
