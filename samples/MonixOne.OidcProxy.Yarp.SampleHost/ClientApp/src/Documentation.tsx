@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { createConfiguration, flows, hostCode, initialSetup, createSpaCode, validateSetup, type Setup } from "./documentationContent";
+import { createConfiguration, flows, hostCode, initialSetup, createSpaCode, validateClients, type Setup, type ClientSetup } from "./documentationContent";
 import { createRoutes, routes } from "./routes";
 import "./documentation.css";
 
@@ -24,7 +24,7 @@ function Code({ label, value }: { label: string; value: string }) {
 
 const steps = ["Топология", "OpenID Provider", "Redis и ключи", "Хост и YARP", "React SPA", "Проверка"];
 const fields: [keyof Setup, string][] = [
-  ["origin", "SPA / BFF origin"], ["pathBase", "PathBase (пусто для корня)"], ["authority", "OIDC Authority"], ["clientId", "Client ID"],
+  ["name", "Client name"], ["origin", "SPA / BFF origin"], ["pathBase", "PathBase (пусто для корня)"], ["authority", "OIDC Authority"], ["clientId", "Client ID"],
   ["api", "Resource API"], ["application", "Application name"], ["environment", "Environment"],
   ["namespace", "Redis namespace"], ["scopes", "Scopes"],
 ];
@@ -33,9 +33,10 @@ export default function Documentation() {
   const [section, setSection] = useState<"setup" | "flows">("setup");
   const [step, setStep] = useState(0);
   const [setup, setSetup] = useState(initialSetup);
+  const [others, setOthers] = useState<ClientSetup[]>([]);
   const [flow, setFlow] = useState<keyof typeof flows>("login");
   const [flowStep, setFlowStep] = useState(0);
-  const errors = validateSetup(setup);
+  const errors = validateClients(setup, others);
   const valid = errors.length === 0;
   const targetRoutes = createRoutes(setup.pathBase);
   const current = flows[flow];
@@ -65,8 +66,15 @@ export default function Documentation() {
         <article className="doc-panel">
           <p className="doc-kicker">ШАГ {step + 1} ИЗ {steps.length}</p><h2>{steps[step]}</h2>
           {step === 0 && <>
-            <p>SPA и BFF работают на одном HTTPS origin. Resource API и OpenID Provider — отдельные серверы. Пакет проксирует только маршруты из конфигурации YARP.</p>
+            <p>Один BFF/YARP-хост обслуживает несколько SPA на разных HTTPS origins. Для каждой SPA задаются свой client name, OIDC client_id, callback URI, cookie-схема и Redis sessions. Resource API и OpenID Provider — отдельные серверы. Пакет проксирует только маршруты из конфигурации YARP.</p>
             <div className="doc-field-grid">{fields.map(([key, label]) => <label key={key}>{label}<input value={setup[key]} autoComplete="off" spellCheck={false} onChange={e => setSetup({ ...setup, [key]: e.target.value })} /></label>)}</div>
+            {others.map((client, index) => <fieldset key={index}><legend>SPA {index + 2}</legend>
+              <div className="doc-field-grid">{fields.filter(([key]) => !["application", "environment", "namespace"].includes(key)).map(([key, label]) => {
+                const clientKey = key as keyof ClientSetup;
+                return <label key={key}>SPA {index + 2} · {label}<input value={client[clientKey]} autoComplete="off" spellCheck={false} onChange={e => setOthers(others.map((value, at) => at === index ? { ...value, [key]: e.target.value } : value))} /></label>;
+              })}</div><button type="button" onClick={() => setOthers(others.filter((_, at) => at !== index))}>Удалить SPA {index + 2}</button>
+            </fieldset>)}
+            <button type="button" onClick={() => setOthers([...others, { ...initialSetup, name: `spa${others.length + 2}`, origin: `https://spa${others.length + 2}.example.com`, clientId: `spa${others.length + 2}-bff` }])}>Добавить SPA</button>
             {!valid && <div role="alert" className="doc-note doc-error"><strong>Проверьте параметры</strong><ul>{errors.map(error => <li key={error}>{error}</li>)}</ul></div>}
             <p className="doc-note">Это проверка формата, а не проверка подключения. DNS, TLS, доступность Redis, регистрация клиента и права на API проверяются при запуске и ручном проходе сценария.</p>
             <img className="doc-diagram" src={`${routes.docsAssets}/BFF-flow.png`} alt="SPA обращается к BFF через cookie и CSRF header; BFF использует Redis, OpenID Provider и YARP для доступа к API." />
@@ -74,7 +82,11 @@ export default function Documentation() {
           {step === 1 && <>
             <p>Зарегистрируйте <strong>confidential web client</strong>. Разрешите Authorization Code, Refresh Token и PKCE S256. SPA не регистрируется как public OAuth client и не получает client secret.</p>
             <Code label="Redirect URI" value={callback} /><Code label="Post logout redirect URI" value={logoutCallback} />
-            <p>Выдайте клиенту нужные scopes. <code>openid</code> включает OIDC, <code>profile</code> — профиль, <code>offline_access</code> — право запрашивать refresh token. API scopes и resource/audience определяет ваш провайдер.</p>
+            {valid && others.map(client => <section key={client.name}><h3>{client.name} · {client.origin}</h3>
+              <Code label={`Redirect URI · ${client.name}`} value={new URL(createRoutes(client.pathBase).loginCallback, client.origin).href} />
+              <Code label={`Post logout redirect URI · ${client.name}`} value={new URL(createRoutes(client.pathBase).logoutCallback, client.origin).href} />
+            </section>)}
+            <p>Зарегистрируйте каждого клиента отдельно, даже если используется один OpenID Provider. Выдайте клиенту нужные scopes. <code>openid</code> включает OIDC, <code>profile</code> — профиль, <code>offline_access</code> — право запрашивать refresh token. API scopes и resource/audience определяет ваш провайдер.</p>
             <details open><summary>OpenIddict: что должно быть настроено</summary><ul>
               <li>Стандартные discovery/JWKS, authorization, token, end-session и revocation endpoints по HTTPS.</li>
               <li>У client application — secret, точные RedirectUris и PostLogoutRedirectUris; permissions для authorization, token, end-session, revocation, code и refresh grants, response type code и требуемых scopes.</li>
@@ -87,18 +99,18 @@ export default function Documentation() {
           </>}
           {step === 2 && <>
             <p>Зарегистрируйте один host-owned <code>ConnectionMultiplexer</code>. Все реплики одного BFF используют одинаковый Redis и одинаковые application/environment/namespace. Независимым проектам и окружениям задайте разные значения.</p>
-            <Code label="Префикс Redis" value={`${setup.application.toLowerCase()}:${setup.environment.toLowerCase()}:${setup.namespace.toLowerCase()}:`} />
+            <Code label="Префикс Redis" value={`${setup.application.toLowerCase()}:${setup.environment.toLowerCase()}:${setup.namespace.toLowerCase()}:${setup.name}:sessions:`} />
             <p>Пакет использует Redis для защищённых session tickets и общего Data Protection key ring. Поддерживаются Redis 6.2+ команды GETDEL и Lua CAS. Memory fallback отсутствует: потеря Redis приводит к отказу авторизации.</p>
-            <Code label="Настройки через secret provider / environment" value={`ASPNETCORE_ENVIRONMENT=${setup.environment}\nConnectionStrings__Redis=<set through your secret provider>\nOpenIdConnect__ClientSecret=<set through your secret provider>`} />
+            <Code label="Настройки через secret provider / environment" value={`ASPNETCORE_ENVIRONMENT=${setup.environment}\nConnectionStrings__Redis=<set through your secret provider>\n${[setup, ...others].map(client => `Bff__Clients__${client.name}__OpenIdConnect__ClientSecret=<set through your secret provider>`).join("\n")}`} />
             <p className="doc-note">Не помещайте секреты в VITE_* или bundle SPA. Redis требует TLS, аутентификацию, ACL, контролируемую сеть и выбранную политику persistence/backup. Для server-session keys не применяйте произвольное eviction: потерянная запись завершит сессию.</p>
             <details><summary>Data Protection и восстановление Redis</summary><p>Шифрование ticket не защищает от полного доступа к Redis, если в нём же хранится незащищённый master key ring. Хост должен добавить стандартную защиту Data Protection keys независимым сертификатом или KMS, например через <code>AddDataProtection().ProtectKeysWithCertificate(certificate)</code>. Все реплики должны уметь расшифровывать один key ring.</p><p>При восстановлении backup учитывайте, что он может вернуть удалённые сессии и старые refresh credentials. План восстановления должен сбрасывать сессии и отзывать grants или менять область ключей; пакет сам не может обеспечить монотонность внешнего backup.</p></details>
           </>}
           {step === 3 && <>
             <Code label="Установка" value="dotnet pack src/MonixOne.OidcProxy.Yarp/MonixOne.OidcProxy.Yarp.csproj -c Release -o artifacts/nuget" />
-            <p>Пакет ещё не опубликован в NuGet. Сейчас используются ProjectReference из репозитория или локально собранный nupkg. Добавляйте YARP и ConnectionMultiplexer перед AddOidcProxy. Конфигурация OIDC — стандартный OpenIdConnectOptions.</p>
-            {valid ? <Code label="appsettings.json — без секретов" value={createConfiguration(setup)} /> : <p role="alert" className="doc-note doc-error">Сначала исправьте параметры на шаге «Топология».</p>}
+            <p>Пакет ещё не опубликован в NuGet. Сейчас используются ProjectReference из репозитория или локально собранный nupkg. Добавляйте YARP и ConnectionMultiplexer перед AddOidcProxy; затем AddOidcProxyClient для каждой SPA. Конфигурация OIDC — стандартный OpenIdConnectOptions.</p>
+            {valid ? <Code label="appsettings.json — без секретов" value={createConfiguration(setup, others)} /> : <p role="alert" className="doc-note doc-error">Сначала исправьте параметры на шаге «Топология».</p>}
             <Code label="Program.cs" value={hostCode} />
-            <p>Пример передаёт путь <code>/api/…</code> без преобразования. YARP Match.Path может описывать любые API пути, а transforms — менять их перед отправкой. SPA fallback <code>{"{**path}"}</code> обрабатывает все остальные GET/HEAD пути, включая сегменты с точками. Для размещения SPA под путём задайте PathBase хосту, соберите Vite с тем же base и сохраните префикс на ingress. Все MapReverseProxy-маршруты этого BFF требуют его сессию и CSRF header.</p>
+            <p>Пример передаёт путь <code>/api/…</code> без преобразования. YARP Match.Path может описывать любые API пути, а transforms — менять их перед отправкой. SPA fallback <code>{"{**path}"}</code> обрабатывает все остальные GET/HEAD пути, включая сегменты с точками. Для размещения SPA под путём задайте PathBase её клиенту, соберите Vite с тем же base и сохраните префикс на ingress. Каждый BFF route связывается с именем клиента через Metadata["OidcProxy.Client"] и точный Match.Hosts. Защищённый route требует сессию выбранного клиента и CSRF header. Явный AuthorizationPolicy="anonymous" подходит для public assets и не передаёт токены. Маршруты других хостов без этой metadata сохраняют нативное поведение YARP; маршрут на SPA-хосте без привязки отклоняется. Разные SPA bundles обычно обслуживают отдельные anonymous YARP routes; sample показывает один локальный bundle.</p>
             <details><summary>TLS termination и ingress</summary><p>PublicOrigin — внешний адрес браузера. Если TLS завершается на ingress, настройте стандартный ForwardedHeaders middleware перед HSTS/HTTPS redirection и BFF. Доверяйте только конкретным KnownProxies/KnownNetworks. Не доверяйте произвольному входящему X-Forwarded-*; не отключайте TLS validation downstream.</p><p>Убедитесь, что SPA, callback URI и API-запросы видны браузеру на одном origin. Для Vite development используйте HTTPS dev proxy; PublicOrigin должен совпадать с адресом Vite.</p></details>
           </>}
           {step === 4 && <>
@@ -119,6 +131,7 @@ export default function Documentation() {
               "По истечении access token параллельные запросы через две реплики вызывают один refresh.",
               "Logout во время refresh удаляет запись; поздний refresh не возвращает авторизованную сессию.",
               "После logout старые cookie дают 401; UI очищает данные пользователя.",
+              "Два SPA-хоста используют разные client_id/cookies; перенесённые cookie/state не авторизуют другого клиента. Logout и refresh локально изолированы; проверьте также глобальную SSO-политику IdP.",
               "При недоступности Redis BFF возвращает 503; токены, cookies, codes и client secret не попадают в логи.",
               "Ingress доверяет только настроенным proxies; DP key ring защищён независимым сертификатом/KMS.",
             ].map(item => <label key={item}><input type="checkbox" />{item}</label>)}</div>
@@ -135,7 +148,7 @@ export default function Documentation() {
           <div className="doc-flow-detail" aria-live="polite"><p className="doc-kicker">ЭТАП {flowStep + 1} / {current.steps.length}</p><h3>{detail[0]}</h3><p>{detail[1]}</p><p className="doc-note">{detail[2]}</p><div className="doc-pagination"><button className="secondary" disabled={flowStep === 0} onClick={() => setFlowStep(flowStep - 1)}>Предыдущий этап</button><button disabled={flowStep === current.steps.length - 1} onClick={() => setFlowStep(flowStep + 1)}>Следующий этап</button></div></div>
         </div>
         <details><summary>Полная схема {flow === "login" ? "входа" : "взаимодействия"}</summary><a href={flow === "login" ? `${routes.docsAssets}/BFF-login-workflow.png` : `${routes.docsAssets}/BFF-flow.png`}><img className="doc-diagram" src={flow === "login" ? `${routes.docsAssets}/BFF-login-workflow.png` : `${routes.docsAssets}/BFF-flow.png`} alt="Полная схема SPA BFF; подробное текстовое описание приведено в этапах выше." /></a></details>
-        <h3>Контракт браузера</h3><p>Пути ниже относятся к текущему Vite base. Host PathBase и Vite base должны совпадать; Callback URI также включают PathBase.</p><div className="doc-table-wrap"><table><thead><tr><th>Endpoint</th><th>Как вызвать</th><th>Результат</th></tr></thead><tbody>
+        <h3>Контракт браузера</h3><p>Пути ниже относятся к текущему Vite base. Client PathBase и Vite base должны совпадать; Callback URI также включают PathBase.</p><div className="doc-table-wrap"><table><thead><tr><th>Endpoint</th><th>Как вызвать</th><th>Результат</th></tr></thead><tbody>
           <tr><td>GET {routes.login}</td><td>Top-level navigation</td><td>OIDC redirect, затем /</td></tr>
           <tr><td>GET {routes.user}</td><td>Cookie + X-CSRF: 1</td><td>Claims; 401 без сессии</td></tr>
           <tr><td>/api/…</td><td>Cookie + X-CSRF: 1</td><td>YARP → настроенный HTTPS API</td></tr>

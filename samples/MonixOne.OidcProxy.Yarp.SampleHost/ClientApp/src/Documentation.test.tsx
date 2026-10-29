@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import Documentation from "./Documentation";
-import { createConfiguration, initialSetup, validateSetup } from "./documentationContent";
+import { createConfiguration, initialSetup, validateSetup, validateClients } from "./documentationContent";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -24,11 +24,11 @@ it("generates valid server configuration without secret fields", () => {
   const configuration = JSON.parse(createConfiguration(setup));
   // Assert
   expect(validateSetup(setup)).toEqual([]);
-  expect(configuration.OpenIdConnect.ClientId).toBe(setup.clientId);
-  expect(configuration.OpenIdConnect.ClientSecret).toBeUndefined();
+  expect(configuration.Bff.Clients.spa.OpenIdConnect.ClientId).toBe(setup.clientId);
+  expect(configuration.Bff.Clients.spa.OpenIdConnect.ClientSecret).toBeUndefined();
   expect(configuration.ConnectionStrings).toBeUndefined();
   expect(configuration.Bff.KeyNamespace).toBe("frontend");
-  expect(configuration.ReverseProxy.Clusters["resource-api"].Destinations.primary.Address).toBe(setup.api);
+  expect(configuration.ReverseProxy.Clusters["spa-resource-api"].Destinations.primary.Address).toBe(setup.api);
 });
 
 it("updates callback URIs without network requests or browser storage", () => {
@@ -79,4 +79,39 @@ it("generates a mounted SPA configuration and matching callback URIs", () => {
   fireEvent.click(screen.getByRole("button", { name: /05.*React SPA/ }));
   // Assert
   expect(screen.getByRole("region", { name: "Login и чтение сессии" })).toHaveTextContent('/workspace/portal/.auth/me');
+});
+
+it("generates independent clients and exact YARP host bindings", () => {
+  // Arrange
+  const second = { ...initialSetup, name: "workspace", origin: "https://workspace.example:8443", clientId: "workspace-bff", pathBase: "/app" };
+  // Act
+  const configuration = JSON.parse(createConfiguration(initialSetup, [second]));
+  // Assert
+  expect(validateClients(initialSetup, [second])).toEqual([]);
+  expect(Object.keys(configuration.Bff.Clients)).toEqual(["spa", "workspace"]);
+  expect(configuration.Bff.Clients.workspace.OpenIdConnect.ClientId).toBe("workspace-bff");
+  expect(configuration.ReverseProxy.Routes["workspace-api"].Match.Hosts).toEqual(["workspace.example:8443"]);
+  expect(configuration.ReverseProxy.Routes["workspace-api"].Metadata["OidcProxy.Client"]).toBe("workspace");
+  expect(configuration.Bff.Clients.workspace.PathBase).toBe("/app");
+});
+
+it("rejects duplicate effective origins and client names", () => {
+  // Arrange
+  const second = { ...initialSetup, origin: "https://spa.example.com:443" };
+  // Act
+  const errors = validateClients(initialSetup, [second]);
+  // Assert
+  expect(errors).toContain("Client names должны быть уникальны.");
+  expect(errors.some(error => error.includes("отдельный origin"))).toBe(true);
+});
+
+it("adds a second SPA and shows its own callback URI", () => {
+  // Arrange
+  render(<Documentation />);
+  // Act
+  fireEvent.click(screen.getByRole("button", { name: "Добавить SPA" }));
+  fireEvent.change(screen.getByLabelText("SPA 2 · SPA / BFF origin"), { target: { value: "https://workspace.example" } });
+  fireEvent.click(screen.getByRole("button", { name: /02.*OpenID Provider/ }));
+  // Assert
+  expect(within(screen.getByRole("region", { name: "Redirect URI · spa2" })).getByText("https://workspace.example/.auth/login/callback")).toBeVisible();
 });

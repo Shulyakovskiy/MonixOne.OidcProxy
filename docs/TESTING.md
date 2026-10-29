@@ -14,7 +14,7 @@ dotnet test --project tests/MonixOne.OidcProxy.Yarp.Tests/MonixOne.OidcProxy.Yar
 Повтор значимых гонок и совместимости:
 
 ```sh
-dotnet test --project tests/MonixOne.OidcProxy.Yarp.Tests/MonixOne.OidcProxy.Yarp.Tests.csproj -c Release --no-build -- --filter-class 'MonixOne.OidcProxy.Yarp.Tests.Refresh*' --minimum-expected-tests 22
+dotnet test --project tests/MonixOne.OidcProxy.Yarp.Tests/MonixOne.OidcProxy.Yarp.Tests.csproj -c Release --no-build -- --filter-class 'MonixOne.OidcProxy.Yarp.Tests.Refresh*' --filter-class MonixOne.OidcProxy.Yarp.Tests.MultiHostTests --minimum-expected-tests 40
 ```
 
 Concurrency barriers используют TaskCompletionSource и удержание настоящего HTTP-ответа после выпуска rotating refresh token. Session time двигается TimeProvider; тесты не используют sleep для ожидания гонки. Таймауты ограничивают зависшие проверки, а не заменяют синхронизацию.
@@ -29,6 +29,7 @@ Concurrency barriers используют TaskCompletionSource и удержан
 | SpaRoutingTests | Произвольные API пути/методы/query/body, SPA deep links и dotted paths, local returnUrl с query/hash, open-redirect/duplicate rejection, сохранение session при неверном logout target |
 | SpaHostingTests | Разные стандартные PathBase, prefixed callback URI, login/API/logout и возврат в корень SPA |
 | SessionBoundaryTests | Redis connection failure → 503 без proxy, namespace isolation, idle/absolute expiration без refresh, callback replay, GET/CSRF logout rejection |
+| MultiHostTests | Один host, два SPA origins/client_id и PathBase; общий OpenIddict и разные providers; cookie/state replay rejection; refresh contention и logout изолированы; invalid host/metadata startup rejection; anonymous assets и независимые YARP routes |
 | OpenIddictFlowTests | Настоящий OpenIddict + PostgreSQL: authorization/PKCE/token/refresh/revocation/RP logout и HTTPS resource API с официальной validation; encrypted access tokens; scopes/roles API; confidential-client boundary и отсутствие provider session |
 
 OpenIddict storage использует официальный EF Core model и настоящий PostgreSQL. Пакет не имеет собственной SQL-схемы, поэтому тестовая БД создаётся EnsureCreated. Login fixture устанавливает test-only provider session, далее проходит настоящий OIDC flow; это не проверка пользовательского login/consent UI конкретной Identity-системы.

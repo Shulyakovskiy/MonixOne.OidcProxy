@@ -28,12 +28,13 @@
 
 ```text
 SPA любого framework
-  → один same-origin .NET BFF: OIDC + Redis session + YARP
+  → свой HTTPS origin и именованный client внутри общего .NET BFF/YARP host
+    → OIDC + изолированная Redis session на SPA client
     → BR.Identity protocol endpoints
     → Bearer resource APIs, включая Calendar API
 ```
 
-Пакет не должен содержать названия BR-приложений, предопределённые client_id, OTP/passkey grants, business scope lists или legacy SessionInfo. Authority/client/scopes/публичный origin/Redis scope задаёт host; destinations и path transforms задаёт YARP. Повторное использование пакета другой SPA не требует изменения его кода.
+Пакет не должен содержать названия BR-приложений, предопределённые client_id, OTP/passkey grants, business scope lists или legacy SessionInfo. Authority/client/scopes/публичный origin/Redis scope задаёт host; destinations и path transforms задаёт YARP. Один BFF-хост обслуживает много SPA на разных публичных хостах. Каждая имеет AddOidcProxyClient, собственные client_id/cookie/state/session keys; API routes связываются через Match.Hosts и Metadata["OidcProxy.Client"]. Повторное использование пакета другой SPA не требует изменения его кода.
 
 Node `BrowserSessions`, `BrowserIdentity`, session controllers, cookie, credentials storage и их refresh/revocation flow подлежат удалению при реализации перехода. Calendar business API остаётся resource server с собственной авторизацией. При удалении Node BFF из IdentityGuard также удаляются зависимость от BrowserSessions и cookie fallback; входной контракт API становится только Bearer. Сохранение Node session как второго BFF, совместимый facade над `/session-api/*` и browser OAuth-token SDK в целевую схему не входят.
 
@@ -44,7 +45,7 @@ Node `BrowserSessions`, `BrowserIdentity`, session controllers, cookie, credenti
 3. **Browser login на стороне Identity origin.** Существующий OTP UI админки использует mobile grant и не создаёт browser session провайдера. В штатном BFF он не заменяет authorization/PKCE. Доставку login UI и продолжение authorization после browser-session OTP/passkey необходимо проверить отдельно; добавление Identity-специфичного session bridge в пакет не является решением. В исходниках Identity нет AddCors/UseCors, поэтому прямой cross-origin fetch с credentials нельзя считать готовым способом без проверки ingress/браузера.
 4. **Claims/UI.** Перевести SPA на claims из BFF `/.auth/me` и профиль из профильного resource API. BFF не копирует roles/email из access token в ID principal и не возвращает дополнительные поля token endpoint `profile`, `userLinks`, `ok`, `reason`. Текущий SessionInfo не совпадает с этим контрактом.
 5. **Маршруты.** Подключить Identity user-management и Calendar resource routes непосредственно через конфигурацию YARP. Node user-management proxy зависит от удаляемой сессии и не подходит как backend для нового BFF. Настроить конкретные service scopes/resources, которые требуют эти endpoints.
-6. **Путь публикации SPA.** Если сохраняется `/admin`, host использует штатный ASP.NET Core PathBase, Vite base совпадает с ним, ingress сохраняет префикс до BFF, а зарегистрированные callback URI включают его. Если ingress уже снял `/admin`, UsePathBase не восстановит его автоматически. Конкретные ingress-изменения пока не выполнены.
+6. **Путь публикации SPA.** Если сохраняется `/admin`, у соответствующего Bff:Clients:{name} задан PathBase, пакет применяет штатный ASP.NET Core middleware, Vite base совпадает с ним, ingress сохраняет префикс до BFF, а зарегистрированные callback URI включают его. Если ingress уже снял `/admin`, UsePathBase не восстановит его автоматически. Конкретные ingress-изменения пока не выполнены.
 7. **HTTPS до API.** Пакет требует явные HTTPS destinations с проверкой сертификатов. Текущий HTTP listener Calendar API требует проверенной TLS-точки перед ним. Нельзя подставить публичный gateway URL, если он вернёт запрос на тот же BFF route: получится proxy loop.
 8. **CSRF.** SPA использует единый `X-CSRF: 1` на границе .NET BFF. Legacy X-BR-CSRF и Node browser-session middleware удаляются вместе с Node BFF; второй browser-security слой для совместимости не сохраняется. Calendar API продолжает самостоятельно валидировать Bearer и бизнес-права, без cookie fallback.
 9. **Logout и кэш.** Использовать BFF antiforgery + native POST logout с top-level redirect. Прежний AJAX logout 204 не соответствует RP-initiated logout. Очистить query cache при 401 и убрать Node polling/refresh API.
@@ -53,7 +54,7 @@ Node `BrowserSessions`, `BrowserIdentity`, session controllers, cookie, credenti
 
 ## Что уже проверено
 
-- Пакет: 70 тестов на native MTP; реальные HTTP OIDC/YARP/Redis сценарии, rotating refresh, ошибки/таймауты, logout, JWE ID/access tokens и JWKS rollover. Native MTP/xUnit runner выполняет тесты; актуальные команды и состав — [TESTING.md](TESTING.md).
+- Пакет: HTTP-тесты на native MTP; реальные HTTP OIDC/YARP/Redis сценарии, rotating refresh, ошибки/таймауты, logout, JWE ID/access tokens и JWKS rollover. Native MTP/xUnit runner выполняет тесты; актуальные команды и состав — [TESTING.md](TESTING.md).
 - Текущий BR.Identity: 22 OpenIddict, 16 AuthorizationCodePkce и 11 resource-server/YARP integration tests прошли на его настоящем application pipeline с disposable PostgreSQL/Redis. Исходники сервиса не менялись.
 - Текущий BR.Admin-Identity: 131 frontend/Vite tests, TypeScript typecheck и 17 browser-session/Identity server tests прошли. Server tests использовали отдельную временную БД `calendar_compat_test`; исходники приложения не менялись.
 
@@ -61,4 +62,4 @@ Node `BrowserSessions`, `BrowserIdentity`, session controllers, cookie, credenti
 
 ## Критерий завершения проверки перед подключением
 
-После подготовки окружения пройти в настоящем браузере: первый вход без Identity cookie, повторный вход, API scopes/roles, expiry/refresh через две BFF реплики, logout во время refresh и в другой вкладке, ошибки Redis/IdP, отсутствие OAuth credentials в JavaScript/storage/network responses, и возврат в правильный SPA PathBase. Затем проверить календарные и user-management операции с удалённым Node BFF. До этого пакет не публиковать и потребителей не переключать.
+После подготовки окружения пройти в настоящем браузере: первый вход без Identity cookie, повторный вход, API scopes/roles, несколько SPA origins/client_id на общем BFF, запрет cookie/state replay между ними, expiry/refresh через две BFF реплики, logout во время refresh и в другой вкладке, ошибки Redis/IdP, отсутствие OAuth credentials в JavaScript/storage/network responses, и возврат в правильный SPA PathBase. Затем проверить календарные и user-management операции с удалённым Node BFF. До этого пакет не публиковать и потребителей не переключать.

@@ -17,7 +17,7 @@ corepack pnpm docs:dev
 Требуются .NET SDK из `global.json`, Redis 6.2+, настроенный confidential OIDC/OpenIddict client и HTTPS Resource API. В `appsettings.json` замените example authority/client ID/адрес API, а credentials передайте через secret provider:
 
 - `ConnectionStrings__Redis` — конфигурация host-owned ConnectionMultiplexer;
-- `OpenIdConnect__ClientSecret` — secret confidential web client;
+- `Bff__Clients__spa__OpenIdConnect__ClientSecret` — secret confidential web client;
 - `ASPNETCORE_ENVIRONMENT` — область Redis для окружения.
 
 ### Вариант 1: одна production-подобная точка входа
@@ -33,7 +33,7 @@ dotnet run --urls https://localhost:5001
 
 Доверенный development certificate подготовьте стандартным `dotnet dev-certs https --trust`. PublicOrigin и зарегистрированные URI:
 
-- `Bff:PublicOrigin`: `https://localhost:5001`;
+- `Bff:Clients:spa:PublicOrigin`: `https://localhost:5001`;
 - login callback: `https://localhost:5001/.auth/login/callback`;
 - logout callback: `https://localhost:5001/.auth/signout-callback`.
 
@@ -48,11 +48,11 @@ cd ClientApp
 corepack pnpm dev
 ```
 
-В этом режиме PublicOrigin и оба зарегистрированных callback URI должны использовать порт **5173**, поскольку браузер работает через Vite. Proxy сохраняет origin и направляет `/.auth` и `/api` на BFF. Секреты не передавайте через `VITE_*`.
+В этом режиме PublicOrigin и оба зарегистрированных callback URI должны использовать порт **5173**, поскольку браузер работает через Vite. В YARP route также замените Match.Hosts на localhost:5173. Proxy сохраняет origin и направляет `/.auth` и `/api` на BFF. Секреты не передавайте через `VITE_*`.
 
 ## SPA под путём
 
-Стандартный `PathBase` задаётся в host configuration. Например, для `/admin` соберите `corepack pnpm build --base /admin/`, задайте `PathBase=/admin` хосту и включите тот же префикс в зарегистрированные callback URI. Клиент берёт base из Vite BASE_URL. Ingress должен передавать префикс до BFF; удаление префикса gateway требует отдельной корректной настройки до переключения.
+PathBase задаётся отдельно каждому BFF client; пакет применяет штатный ASP.NET Core middleware. Например, для `/admin` соберите `corepack pnpm build --base /admin/`, задайте `Bff:Clients:spa:PathBase=/admin` и включите тот же префикс в зарегистрированные callback URI. Клиент берёт base из Vite BASE_URL. Ingress должен передавать префикс до BFF; удаление префикса gateway требует отдельной корректной настройки до переключения.
 
 ## Что делает клиент
 
@@ -61,3 +61,9 @@ corepack pnpm dev
 При 401 кэш пользователя/API очищается, показывается вход. 503 показывается как недоступность. OAuth refresh и повтор redemption не выполняются в React. Перед native form logout текущие queries отменяются, новые действия UI блокируются.
 
 API `/api/status` — пример внешнего маршрута, его реализует ваш Resource API. Собственного API, Identity UI и обходов проверки TLS sample не содержит.
+
+## Несколько SPA на разных хостах
+
+Добавьте записи в `Bff:Clients`; Program регистрирует каждую через AddOidcProxyClient. Для каждого клиента нужны PublicOrigin, собственный confidential client_id/secret, разрешённые scopes и точные callback URI. YARP route указывает тот же host в Match.Hosts и client name в Metadata["OidcProxy.Client"]. Разные bundles обслуживайте host-bound anonymous YARP routes, а resource routes оставьте защищёнными. Пример двух клиентов приведён в [корневом руководстве](../../README.md).
+
+Session cookie, OIDC state, Redis sessions и refresh/logout изолированы по клиентам. Одинаковые технические пути `/.auth/*` допустимы на разных хостах. Неизвестные SPA origins и маршруты без client binding не получают чужую сессию. Для hot reload под PathBase дополнительно настройте Vite proxy на prefixed auth/API paths; встроенный dev proxy sample показывает корневую SPA.
