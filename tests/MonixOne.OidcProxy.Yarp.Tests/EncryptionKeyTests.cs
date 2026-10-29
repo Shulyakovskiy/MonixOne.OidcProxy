@@ -45,18 +45,27 @@ public sealed class EncryptionKeyTests(InfrastructureFixture infrastructure)
         // Act
         using var login = await browser.LoginAsync(provider);
         var key = SessionKey(host.KeyNamespace);
-        var encrypted = (string)(await infrastructure.Connection.GetDatabase().StringGetAsync(key))!;
-        var json = JWT.Decrypt(encrypted, infrastructure.EncryptionKey,
-            JweAlgorithm.PBES2_HS256_A128KW, JweEncryption.A256GCM);
+        var encrypted = (string)
+            (await infrastructure.Connection.GetDatabase().StringGetAsync(key))!;
+        var json = JWT.Decrypt(
+            encrypted,
+            infrastructure.EncryptionKey,
+            JweAlgorithm.PBES2_HS256_A128KW,
+            JweEncryption.A256GCM
+        );
         var payload = JsonNode.Parse(json)!;
-        var ticket = TicketSerializer.Default.Deserialize(Convert.FromBase64String(payload["Ticket"]!.GetValue<string>()))!;
+        var ticket = TicketSerializer.Default.Deserialize(
+            Convert.FromBase64String(payload["Ticket"]!.GetValue<string>())
+        )!;
 
         // Assert: the Redis session needs no Data Protection APIs or key ring to decrypt.
         login.StatusCode.ShouldBe(HttpStatusCode.Redirect);
         payload["SessionKey"]!.GetValue<string>().ShouldBe(key.ToString());
         JWT.Headers(encrypted)["alg"].ShouldBe("PBES2-HS256+A128KW");
         JWT.Headers(encrypted)["enc"].ShouldBe("A256GCM");
-        (ticket.Properties.GetTokenValue("access_token") == identity.LastAccessToken).ShouldBeTrue();
+        (
+            ticket.Properties.GetTokenValue("access_token") == identity.LastAccessToken
+        ).ShouldBeTrue();
         encrypted.Contains(identity.LastAccessToken!, StringComparison.Ordinal).ShouldBeFalse();
     }
 
@@ -71,7 +80,8 @@ public sealed class EncryptionKeyTests(InfrastructureFixture infrastructure)
 
         // Act
         using var login = await browser.LoginAsync(provider);
-        var entries = await infrastructure.Connection.GetDatabase()
+        var entries = await infrastructure
+            .Connection.GetDatabase()
             .ListRangeAsync("test-spa:testing:" + host.KeyNamespace + ":data-protection");
 
         // Assert
@@ -81,8 +91,12 @@ public sealed class EncryptionKeyTests(InfrastructureFixture infrastructure)
         {
             var xml = XElement.Parse(entry.ToString());
             xml.Descendants("masterKey").ShouldBeEmpty();
-            var decrypted = JWT.Decrypt(xml.Descendants("jwe").Single().Value, infrastructure.EncryptionKey,
-                JweAlgorithm.PBES2_HS256_A128KW, JweEncryption.A256GCM);
+            var decrypted = JWT.Decrypt(
+                xml.Descendants("jwe").Single().Value,
+                infrastructure.EncryptionKey,
+                JweAlgorithm.PBES2_HS256_A128KW,
+                JweEncryption.A256GCM
+            );
             XElement.Parse(decrypted).Name.LocalName.ShouldBe("masterKey");
         }
     }
@@ -145,23 +159,35 @@ public sealed class EncryptionKeyTests(InfrastructureFixture infrastructure)
         }
         else if (defect == "algorithm")
         {
-            parts[0] = Base64UrlEncoder.Encode(Base64UrlEncoder.Decode(parts[0])
-                .Replace("A256GCM", "A128GCM", StringComparison.Ordinal));
+            parts[0] = Base64UrlEncoder.Encode(
+                Base64UrlEncoder
+                    .Decode(parts[0])
+                    .Replace("A256GCM", "A128GCM", StringComparison.Ordinal)
+            );
             encrypted = string.Join('.', parts);
         }
         else
         {
-            var json = JWT.Decrypt(encrypted, infrastructure.EncryptionKey,
-                JweAlgorithm.PBES2_HS256_A128KW, JweEncryption.A256GCM);
-            if (defect == "invalid-json") json = "{";
+            var json = JWT.Decrypt(
+                encrypted,
+                infrastructure.EncryptionKey,
+                JweAlgorithm.PBES2_HS256_A128KW,
+                JweEncryption.A256GCM
+            );
+            if (defect == "invalid-json")
+                json = "{";
             if (defect == "missing-binding")
             {
                 var payload = JsonNode.Parse(json)!;
                 payload.AsObject().Remove("SessionKey");
                 json = payload.ToJsonString();
             }
-            encrypted = JWT.Encode(json, defect == "wrong-key" ? "a different test secret" : infrastructure.EncryptionKey,
-                JweAlgorithm.PBES2_HS256_A128KW, JweEncryption.A256GCM);
+            encrypted = JWT.Encode(
+                json,
+                defect == "wrong-key" ? "a different test secret" : infrastructure.EncryptionKey,
+                JweAlgorithm.PBES2_HS256_A128KW,
+                JweEncryption.A256GCM
+            );
         }
         await database.StringSetAsync(key, encrypted);
 
@@ -178,13 +204,16 @@ public sealed class EncryptionKeyTests(InfrastructureFixture infrastructure)
     [InlineData("session")]
     [InlineData("client")]
     [InlineData("namespace")]
-    public async Task Proxy_JweCopiedToAnotherSession_RejectsWithoutAffectingTheOriginal(string boundary)
+    public async Task Proxy_JweCopiedToAnotherSession_RejectsWithoutAffectingTheOriginal(
+        string boundary
+    )
     {
         // Arrange: valid encryption must not allow moving a record between identities or clients.
         var ct = TestContext.Current.CancellationToken;
         using var identity = new OidcWireMock(infrastructure);
         await using var source = identity.CreateBff();
-        if (boundary == "client") source.AddClient("second", new Uri("https://second.example"), identity);
+        if (boundary == "client")
+            source.AddClient("second", new Uri("https://second.example"), identity);
         await using var separate = identity.CreateBff();
         var target = boundary == "namespace" ? separate : source;
         using var original = source.CreateBrowser();
@@ -192,14 +221,20 @@ public sealed class EncryptionKeyTests(InfrastructureFixture infrastructure)
         using var provider = identity.CreateIdentityBrowser();
         using var firstLogin = await original.LoginAsync(provider);
         var sourceKey = SessionKey(source.KeyNamespace);
-        using var secondLogin = await victim.LoginAsync(provider,
-            origin: boundary == "client" ? new Uri("https://second.example") : null);
-        var targetKey = SessionKeys(target.KeyNamespace, boundary == "client" ? "second" : "spa").Single(key => key != sourceKey);
+        using var secondLogin = await victim.LoginAsync(
+            provider,
+            origin: boundary == "client" ? new Uri("https://second.example") : null
+        );
+        var targetKey = SessionKeys(target.KeyNamespace, boundary == "client" ? "second" : "spa")
+            .Single(key => key != sourceKey);
         var database = infrastructure.Connection.GetDatabase();
         await database.StringSetAsync(targetKey, await database.StringGetAsync(sourceKey));
 
         // Act
-        using var rejected = await victim.ApiAsync(boundary == "client" ? "https://second.example/api/status" : "/api/status", ct);
+        using var rejected = await victim.ApiAsync(
+            boundary == "client" ? "https://second.example/api/status" : "/api/status",
+            ct
+        );
         using var accepted = await original.ApiAsync(cancellationToken: ct);
 
         // Assert
@@ -218,10 +253,17 @@ public sealed class EncryptionKeyTests(InfrastructureFixture infrastructure)
         await using var host = identity.CreateBff();
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddDataProtection().PersistKeysToStackExchangeRedis(infrastructure.Connection,
-            "test-spa:testing:" + host.KeyNamespace + ":data-protection");
+        services
+            .AddDataProtection()
+            .PersistKeysToStackExchangeRedis(
+                infrastructure.Connection,
+                "test-spa:testing:" + host.KeyNamespace + ":data-protection"
+            );
         using var legacy = services.BuildServiceProvider();
-        legacy.GetRequiredService<IDataProtectionProvider>().CreateProtector("legacy").Protect("old-cookie");
+        legacy
+            .GetRequiredService<IDataProtectionProvider>()
+            .CreateProtector("legacy")
+            .Protect("old-cookie");
 
         // Act
         var failure = Should.Throw<OptionsValidationException>(() => host.CreateBrowser());
@@ -231,12 +273,22 @@ public sealed class EncryptionKeyTests(InfrastructureFixture infrastructure)
         identity.CodeRequests.ShouldBe(0);
     }
 
-    private RedisKey[] SessionKeys(string scope, string client = "spa") => infrastructure.Connection
-        .GetServer(infrastructure.Connection.GetEndPoints().Single())
-        .Keys(pattern: "test-spa:testing:" + scope + ":" + client + ":sessions:*").ToArray();
+    private RedisKey[] SessionKeys(string scope, string client = "spa") =>
+        infrastructure
+            .Connection.GetServer(infrastructure.Connection.GetEndPoints().Single())
+            .Keys(pattern: "test-spa:testing:" + scope + ":" + client + ":sessions:*")
+            .ToArray();
 
     private RedisKey SessionKey(string scope) => SessionKeys(scope).Single();
 
-    private static string SessionCookie(HttpResponseMessage response) => response.Headers.GetValues("Set-Cookie")
-        .Single(value => value.StartsWith(OidcProxyDefaults.CookieName("spa") + "=", StringComparison.Ordinal)).Split(';')[0];
+    private static string SessionCookie(HttpResponseMessage response) =>
+        response
+            .Headers.GetValues("Set-Cookie")
+            .Single(value =>
+                value.StartsWith(
+                    OidcProxyDefaults.CookieName("spa") + "=",
+                    StringComparison.Ordinal
+                )
+            )
+            .Split(';')[0];
 }

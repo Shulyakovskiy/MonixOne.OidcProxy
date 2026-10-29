@@ -18,22 +18,37 @@ public sealed class RefreshLoadTests(InfrastructureFixture infrastructure, ITest
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var arrivals = 0;
         using var identity = new OidcWireMock(infrastructure)
-        { ReleaseRefresh = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+        {
+            ReleaseRefresh = new(TaskCreationOptions.RunContinuationsAsynchronously),
+        };
         await using var host = identity.CreateBff();
-        await using var monitored = host.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
-            services.PostConfigure<CookieAuthenticationOptions>(OidcProxyDefaults.CookieScheme("spa"), options =>
+        await using var monitored = host.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+                services.PostConfigure<CookieAuthenticationOptions>(
+                    OidcProxyDefaults.CookieScheme("spa"),
+                    options =>
+                    {
+                        var validate = options.Events.OnValidatePrincipal;
+                        options.Events.OnValidatePrincipal = async context =>
+                        {
+                            await validate(context);
+                            if (!context.Request.Headers.ContainsKey("X-Test-Cohort"))
+                                return;
+                            if (Interlocked.Increment(ref arrivals) == 100)
+                                ready.TrySetResult();
+                            await release.Task.WaitAsync(context.HttpContext.RequestAborted);
+                        };
+                    }
+                )
+            )
+        );
+        using var browser = monitored.CreateClient(
+            new WebApplicationFactoryClientOptions
             {
-                var validate = options.Events.OnValidatePrincipal;
-                options.Events.OnValidatePrincipal = async context =>
-                {
-                    await validate(context);
-                    if (!context.Request.Headers.ContainsKey("X-Test-Cohort")) return;
-                    if (Interlocked.Increment(ref arrivals) == 100) ready.TrySetResult();
-                    await release.Task.WaitAsync(context.HttpContext.RequestAborted);
-                };
-            })));
-        using var browser = monitored.CreateClient(new WebApplicationFactoryClientOptions
-        { BaseAddress = BffApplicationFactory.Origin, AllowAutoRedirect = false });
+                BaseAddress = BffApplicationFactory.Origin,
+                AllowAutoRedirect = false,
+            }
+        );
         using var provider = identity.CreateIdentityBrowser();
         using var login = await browser.LoginAsync(provider);
         host.Clock.Advance(TimeSpan.FromSeconds(110));
@@ -42,7 +57,9 @@ public sealed class RefreshLoadTests(InfrastructureFixture infrastructure, ITest
         {
             var owner = browser.ApiAsync(cancellationToken: ct);
             await identity.RefreshStarted.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
-            var observerOptions = ConfigurationOptions.Parse(infrastructure.Redis.GetConnectionString());
+            var observerOptions = ConfigurationOptions.Parse(
+                infrastructure.Redis.GetConnectionString()
+            );
             observerOptions.AllowAdmin = true; // INFO is used only by this test's observer.
             using var observer = await ConnectionMultiplexer.ConnectAsync(observerOptions);
             var server = observer.GetServer(observer.GetEndPoints().Single());
@@ -64,7 +81,9 @@ public sealed class RefreshLoadTests(InfrastructureFixture infrastructure, ITest
             var total = await ReadGetCountAsync(server, ct) - before;
 
             // Assert
-            output.WriteLine($"100 waiters: GET during 500 ms = {duringPolling}; total GET = {total}; refresh = {identity.RefreshRequests}.");
+            output.WriteLine(
+                $"100 waiters: GET during 500 ms = {duringPolling}; total GET = {total}; refresh = {identity.RefreshRequests}."
+            );
             login.StatusCode.ShouldBe(HttpStatusCode.Redirect);
             waiting.ShouldBe(100);
             responses.ShouldAllBe(response => response.StatusCode == HttpStatusCode.OK);
@@ -73,7 +92,8 @@ public sealed class RefreshLoadTests(InfrastructureFixture infrastructure, ITest
             // Redis commandstats includes GET executed inside Lua as well.
             duringPolling.ShouldBeLessThanOrEqualTo(150);
             total.ShouldBeLessThanOrEqualTo(350);
-            foreach (var response in responses) response.Dispose();
+            foreach (var response in responses)
+                response.Dispose();
         }
         finally
         {

@@ -15,9 +15,15 @@ public sealed class SessionBoundaryTests(InfrastructureFixture infrastructure)
         using var browser = host.CreateBrowser();
         using var provider = identity.CreateIdentityBrowser();
         using var login = await browser.LoginAsync(provider);
-        var server = infrastructure.Connection.GetServer(infrastructure.Connection.GetEndPoints().Single());
-        var key = server.Keys(pattern: "test-spa:testing:" + host.KeyNamespace + ":spa:sessions:*").Single();
-        await infrastructure.Connection.GetDatabase().StringSetAsync(key, "invalid-protected-record");
+        var server = infrastructure.Connection.GetServer(
+            infrastructure.Connection.GetEndPoints().Single()
+        );
+        var key = server
+            .Keys(pattern: "test-spa:testing:" + host.KeyNamespace + ":spa:sessions:*")
+            .Single();
+        await infrastructure
+            .Connection.GetDatabase()
+            .StringSetAsync(key, "invalid-protected-record");
 
         // Act
         using var first = await browser.ApiAsync(cancellationToken: ct);
@@ -48,7 +54,9 @@ public sealed class SessionBoundaryTests(InfrastructureFixture infrastructure)
         await infrastructure.Redis.PauseAsync(TestContext.Current.CancellationToken);
         try
         {
-            unavailable = await browser.ApiAsync(cancellationToken: TestContext.Current.CancellationToken);
+            unavailable = await browser.ApiAsync(
+                cancellationToken: TestContext.Current.CancellationToken
+            );
             forwardedWhilePaused = identity.BackendRequests.Count;
         }
         finally
@@ -57,7 +65,9 @@ public sealed class SessionBoundaryTests(InfrastructureFixture infrastructure)
             await infrastructure.Redis.UnpauseAsync(CancellationToken.None);
         }
         using var response = unavailable;
-        using var recovered = await browser.ApiAsync(cancellationToken: TestContext.Current.CancellationToken);
+        using var recovered = await browser.ApiAsync(
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         // Assert
         login.StatusCode.ShouldBe(HttpStatusCode.Redirect);
@@ -78,12 +88,21 @@ public sealed class SessionBoundaryTests(InfrastructureFixture infrastructure)
         using var other = second.CreateBrowser(handleCookies: false);
         using var identityBrowser = identity.CreateIdentityBrowser();
         using var login = await browser.LoginAsync(identityBrowser);
-        other.DefaultRequestHeaders.Add("Cookie", login.Headers.GetValues("Set-Cookie")
-            .Single(value => value.StartsWith("__Host-Http-oidcproxy.spa.session=")).Split(';')[0]);
+        other.DefaultRequestHeaders.Add(
+            "Cookie",
+            login
+                .Headers.GetValues("Set-Cookie")
+                .Single(value => value.StartsWith("__Host-Http-oidcproxy.spa.session="))
+                .Split(';')[0]
+        );
 
         // Act
-        using var crossNamespace = await other.ApiAsync(cancellationToken: TestContext.Current.CancellationToken);
-        using var original = await browser.ApiAsync(cancellationToken: TestContext.Current.CancellationToken);
+        using var crossNamespace = await other.ApiAsync(
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        using var original = await browser.ApiAsync(
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         // Assert
         crossNamespace.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
@@ -105,7 +124,9 @@ public sealed class SessionBoundaryTests(InfrastructureFixture infrastructure)
 
         // Act
         host.Clock.Advance(TimeSpan.FromMinutes(minutes));
-        using var response = await browser.ApiAsync(cancellationToken: TestContext.Current.CancellationToken);
+        using var response = await browser.ApiAsync(
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         // Assert
         login.StatusCode.ShouldBe(HttpStatusCode.Redirect);
@@ -152,7 +173,11 @@ public sealed class SessionBoundaryTests(InfrastructureFixture infrastructure)
 
         // Act
         using var get = await browser.GetAsync(OidcProxyRoutes.Logout, ct);
-        using var post = await browser.PostAsync(OidcProxyRoutes.Logout, new FormUrlEncodedContent([]), ct);
+        using var post = await browser.PostAsync(
+            OidcProxyRoutes.Logout,
+            new FormUrlEncodedContent([]),
+            ct
+        );
         using var stillActive = await browser.ApiAsync(cancellationToken: ct);
 
         // Assert

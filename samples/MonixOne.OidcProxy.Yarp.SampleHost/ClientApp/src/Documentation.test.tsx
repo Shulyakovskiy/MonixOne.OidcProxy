@@ -11,6 +11,33 @@ import {
 
 afterEach(() => vi.unstubAllGlobals());
 
+it("accepts an internal HTTP backend while keeping BFF settings separate from YARP", () => {
+  // Arrange
+  const setup = { ...initialSetup, api: "http://resource-api:8000/" };
+  // Act
+  const config = JSON.parse(createConfiguration(setup));
+  // Assert
+  expect(validateSetup(setup)).toEqual([]);
+  expect(
+    config.ReverseProxy.Clusters["spa-resource-api"].Destinations.primary
+      .Address,
+  ).toBe(setup.api);
+  expect(config.ReverseProxy.Routes["spa-api"].Metadata).toBeUndefined();
+  expect(config.Bff.Clients.spa.Routes["spa-api"].AllowAnonymous).toBe(false);
+});
+
+it.each(["origin", "authority"] as const)(
+  "rejects HTTP for the public %s",
+  (field) => {
+    // Arrange
+    const setup = { ...initialSetup, [field]: "http://public.example" };
+    // Act
+    const errors = validateSetup(setup);
+    // Assert
+    expect(errors.some((error) => error.includes("HTTPS URL"))).toBe(true);
+  },
+);
+
 it("rejects an unsafe public origin before generating configuration", () => {
   // Arrange
   render(<Documentation />);
@@ -149,11 +176,17 @@ it("generates independent clients and exact YARP host bindings", () => {
     configuration.ReverseProxy.Routes["workspace-api"].Match.Hosts,
   ).toEqual(["workspace.example:8443"]);
   expect(
-    configuration.ReverseProxy.Routes["workspace-api"].Metadata[
-      "OidcProxy.Client"
-    ],
-  ).toBe("workspace");
+    configuration.Bff.Clients.workspace.Routes["workspace-api"].AllowAnonymous,
+  ).toBe(false);
+  expect(
+    configuration.ReverseProxy.Routes["workspace-api"].Metadata,
+  ).toBeUndefined();
   expect(configuration.Bff.Clients.workspace.PathBase).toBe("/app");
+  expect(configuration.ForwardedHeaders.AllowedHosts).toEqual([
+    "spa.example.com",
+    "workspace.example",
+  ]);
+  expect(configuration.AllowedHosts).toBe("spa.example.com;workspace.example");
 });
 
 it("rejects duplicate effective origins and client names", () => {
@@ -197,16 +230,21 @@ it("generates a cluster-bound Calendar cookie policy with only the callback anon
     config.ReverseProxy.Routes["google-start"].AuthorizationPolicy,
   ).toBeUndefined();
   expect(
+    config.Bff.Clients.adminidentity.Routes["google-callback"].AllowAnonymous,
+  ).toBe(true);
+  expect(
+    config.Bff.Clients.adminidentity.Routes["google-start"].AllowAnonymous,
+  ).toBe(false);
+  expect(
     config.ReverseProxy.Routes["google-callback"].AuthorizationPolicy,
-  ).toBe("anonymous");
+  ).toBeUndefined();
   expect(config.ReverseProxy.Routes["google-callback"].ClusterId).toBe(
     policy.ClusterId,
   );
   expect(
-    config.ReverseProxy.Routes["google-start"].Metadata[
-      "OidcProxy.CookiePolicy"
-    ],
+    config.Bff.Clients.adminidentity.Routes["google-start"].CookiePolicy,
   ).toBe("calendar-google");
+  expect(config.ReverseProxy.Routes["google-start"].Metadata).toBeUndefined();
 });
 
 it("explains the isolated application cookie callback separately from BFF login", () => {

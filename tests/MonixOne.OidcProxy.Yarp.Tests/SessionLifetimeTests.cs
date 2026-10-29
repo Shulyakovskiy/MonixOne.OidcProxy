@@ -1,9 +1,9 @@
 using System.Net;
 using System.Text.Json.Nodes;
 using Jose;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MonixOne.OidcProxy.Yarp.Tests;
 
@@ -17,18 +17,30 @@ public sealed class SessionLifetimeTests(InfrastructureFixture infrastructure)
         var ct = TestContext.Current.CancellationToken;
         using var identity = new OidcWireMock(infrastructure) { AccessTokenLifetime = 3600 };
         await using var host = identity.CreateBff();
-        await using var delayed = host.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
-            services.PostConfigure<CookieAuthenticationOptions>(OidcProxyDefaults.CookieScheme("spa"), options =>
+        await using var delayed = host.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+                services.PostConfigure<CookieAuthenticationOptions>(
+                    OidcProxyDefaults.CookieScheme("spa"),
+                    options =>
+                    {
+                        var validate = options.Events.OnValidatePrincipal;
+                        options.Events.OnValidatePrincipal = async context =>
+                        {
+                            await validate(context);
+                            if (context.Request.Path == "/api/status")
+                                host.Clock.Advance(TimeSpan.FromMinutes(21));
+                        };
+                    }
+                )
+            )
+        );
+        using var browser = delayed.CreateClient(
+            new WebApplicationFactoryClientOptions
             {
-                var validate = options.Events.OnValidatePrincipal;
-                options.Events.OnValidatePrincipal = async context =>
-                {
-                    await validate(context);
-                    if (context.Request.Path == "/api/status") host.Clock.Advance(TimeSpan.FromMinutes(21));
-                };
-            })));
-        using var browser = delayed.CreateClient(new WebApplicationFactoryClientOptions
-        { BaseAddress = BffApplicationFactory.Origin, AllowAutoRedirect = false });
+                BaseAddress = BffApplicationFactory.Origin,
+                AllowAutoRedirect = false,
+            }
+        );
         using var provider = identity.CreateIdentityBrowser();
         using var login = await browser.LoginAsync(provider);
 
@@ -48,9 +60,13 @@ public sealed class SessionLifetimeTests(InfrastructureFixture infrastructure)
         // Arrange: refresh starts at +9 while the original idle expiry is +10.
         var ct = TestContext.Current.CancellationToken;
         using var identity = new OidcWireMock(infrastructure)
-        { AccessTokenLifetime = 10, ReleaseRefresh = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+        {
+            AccessTokenLifetime = 10,
+            ReleaseRefresh = new(TaskCreationOptions.RunContinuationsAsynchronously),
+        };
         await using var host = identity.CreateBff();
-        host.ConfigureClientOptions = options => options.SessionIdleTimeout = TimeSpan.FromSeconds(10);
+        host.ConfigureClientOptions = options =>
+            options.SessionIdleTimeout = TimeSpan.FromSeconds(10);
         using var browser = host.CreateBrowser();
         using var provider = identity.CreateIdentityBrowser();
         using var login = await browser.LoginAsync(provider);
@@ -82,15 +98,35 @@ public sealed class SessionLifetimeTests(InfrastructureFixture infrastructure)
         using var browser = host.CreateBrowser();
         using var provider = identity.CreateIdentityBrowser();
         using var login = await browser.LoginAsync(provider);
-        var server = infrastructure.Connection.GetServer(infrastructure.Connection.GetEndPoints().Single());
-        var key = server.Keys(pattern: "test-spa:testing:" + host.KeyNamespace + ":spa:sessions:*").Single();
+        var server = infrastructure.Connection.GetServer(
+            infrastructure.Connection.GetEndPoints().Single()
+        );
+        var key = server
+            .Keys(pattern: "test-spa:testing:" + host.KeyNamespace + ":spa:sessions:*")
+            .Single();
         var database = infrastructure.Connection.GetDatabase();
-        var payload = JsonNode.Parse(JWT.Decrypt((string)(await database.StringGetAsync(key))!,
-            infrastructure.EncryptionKey, JweAlgorithm.PBES2_HS256_A128KW, JweEncryption.A256GCM))!;
+        var payload = JsonNode.Parse(
+            JWT.Decrypt(
+                (string)(await database.StringGetAsync(key))!,
+                infrastructure.EncryptionKey,
+                JweAlgorithm.PBES2_HS256_A128KW,
+                JweEncryption.A256GCM
+            )
+        )!;
         payload.AsObject().Remove("RefreshAt");
-        var ttl = await database.KeyTimeToLiveAsync(key) ?? throw new InvalidOperationException("Fixture session must have a TTL.");
-        await database.StringSetAsync(key, JWT.Encode(payload.ToJsonString(), infrastructure.EncryptionKey,
-            JweAlgorithm.PBES2_HS256_A128KW, JweEncryption.A256GCM), ttl);
+        var ttl =
+            await database.KeyTimeToLiveAsync(key)
+            ?? throw new InvalidOperationException("Fixture session must have a TTL.");
+        await database.StringSetAsync(
+            key,
+            JWT.Encode(
+                payload.ToJsonString(),
+                infrastructure.EncryptionKey,
+                JweAlgorithm.PBES2_HS256_A128KW,
+                JweEncryption.A256GCM
+            ),
+            ttl
+        );
 
         // Act
         using var initial = await browser.ApiAsync(cancellationToken: ct);
@@ -143,9 +179,14 @@ public sealed class SessionLifetimeTests(InfrastructureFixture infrastructure)
     {
         // Arrange
         var ct = TestContext.Current.CancellationToken;
-        using var identity = new OidcWireMock(infrastructure) { AccessTokenLifetime = 25, IssueRefreshToken = false };
+        using var identity = new OidcWireMock(infrastructure)
+        {
+            AccessTokenLifetime = 25,
+            IssueRefreshToken = false,
+        };
         await using var host = identity.CreateBff();
-        host.ConfigureClientOptions = options => options.SessionIdleTimeout = TimeSpan.FromSeconds(10);
+        host.ConfigureClientOptions = options =>
+            options.SessionIdleTimeout = TimeSpan.FromSeconds(10);
         host.ConfigureOidc = options => options.Scope.Remove("offline_access");
         using var browser = host.CreateBrowser();
         using var provider = identity.CreateIdentityBrowser();

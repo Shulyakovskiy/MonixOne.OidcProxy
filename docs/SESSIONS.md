@@ -1,114 +1,88 @@
-# Сессии, шифрование и Redis
+# Сессии и Redis
 
-[Настройка BFF](../README.md#пошаговая-настройка) · [Cookies приложений](COOKIES.md) · [Проверки](TESTING.md)
+[Настройка BFF](../README.md#пошаговая-настройка) · [Cookies приложений](COOKIES.md)
 
 ## 1. Что и чем защищается
 
-| Данные | Защита | Хранение |
-| --- | --- | --- |
-| Серверная сессия: ticket с OAuth-токенами, сроки и состояние refresh | Напрямую `jose-jwt`, ключ `Bff:EncryptionKey` | Redis, JWE Compact Serialization |
-| Session cookie со случайной ссылкой, OIDC state, antiforgery | Стандартный ASP.NET Core Data Protection | Браузер; общий framework key ring в Redis |
-| Секреты framework key ring | `jose-jwt` с `Bff:EncryptionKey` | Redis, зашифрованный XML descriptor |
-| `Bff:EncryptionKey` | Secret provider хоста | Конфигурация процесса, отдельно от Redis |
+| Данные | Защита и хранение |
+| --- | --- |
+| Серверная сессия с claims, OAuth-токенами и состоянием refresh | JWE в Redis; `jose-jwt`, PBES2-HS256+A128KW + A256GCM |
+| Cookie со случайной ссылкой, OIDC state, antiforgery | Стандартный ASP.NET Core Data Protection |
+| Общий Data Protection key ring | Redis; секретные descriptors зашифрованы тем же EncryptionKey |
+| `Bff:EncryptionKey` | Secret provider хоста, отдельно от Redis |
 
-Data Protection не участвует в шифровании или расшифровке серверных сессий.
-Он нужен стандартным cookie/OIDC/antiforgery механизмам ASP.NET Core.
-Общий каталог, файловый key ring и сертификат шифрования для пакета не требуются.
+Браузер не получает ticket или OAuth-токены. Общий каталог и сертификат шифрования не нужны.
 
 ## 2. Формат серверной сессии
 
-`SessionStore` сериализует сессию в JSON и вызывает стандартные методы библиотеки:
+JSON содержит authentication ticket, idle/absolute expiry, SessionKey и состояние refresh.
+SessionKey связывает payload с приложением, окружением, клиентом и session ID:
+перенос JWE в другую запись не авторизует запрос.
 
-```csharp
-string encrypted = JWT.Encode(json, encryptionKey,
-    JweAlgorithm.PBES2_HS256_A128KW, JweEncryption.A256GCM);
-
-string decryptedJson = JWT.Decrypt(encrypted, encryptionKey,
-    JweAlgorithm.PBES2_HS256_A128KW, JweEncryption.A256GCM);
-```
-
-PBES2-HS256+A128KW выводит ключ из строкового секрета и защищает ключ шифрования содержимого.
-A256GCM шифрует содержимое и проверяет его целостность.
-Соль, IV, ключ содержимого и authentication tag формирует `jose-jwt`.
-При расшифровке ожидаемые алгоритмы заданы явно; алгоритм из входящей строки не выбирается произвольно.
-
-Внутри зашифрованного JSON находятся:
-
-- `Ticket` — стандартный ASP.NET Core authentication ticket в Base64 с claims и OAuth-токенами;
-- `AbsoluteExpiresAt`, `IdleExpiresAt` — границы жизни сессии;
-- `SessionKey` — полный Redis key, связывающий payload с приложением, окружением, клиентом и session ID;
-- `RefreshAt`, `RefreshOperation`, `RefreshDeadline` — данные координации refresh.
-
-После расшифровки `SessionKey` должен совпасть с ключом прочитанной записи.
-Перенос корректного JWE в другую сессию, клиент или namespace не авторизует запрос.
-Браузер получает только защищённую случайную ссылку; полный ticket и токены остаются на сервере.
-
-PBES2 выполняется при каждом шифровании/расшифровке. Дополнительного кэша расшифрованных сессий между запросами нет.
+Соль, IV и ключ содержимого формирует jose-jwt. При расшифровке ожидаемые алгоритмы заданы явно.
+EncryptionKey используется как пароль PBES2; Base64-строка не декодируется в raw AES key.
 
 ## 3. Конфигурация и реплики
 
-Передайте через secret provider/environment:
+Нужны Redis 6.2+ с GETDEL/Lua и отдельный постоянный `Bff:EncryptionKey`.
+Пакет создаёт один ConnectionMultiplexer в DI; заранее зарегистрированный экземпляр использует повторно.
+Секрет можно сгенерировать командой `openssl rand -base64 32`; не меняйте его при обычном redeploy.
+Проверяется наличие значения, а не его энтропия.
 
-```text
-ConnectionStrings__Redis=<Redis connection with TLS/authentication>
-Bff__EncryptionKey=<strong random PBES2 password>
-```
-
-`EncryptionKey` — обязательная непустая строка. Сгенерируйте сильный секрет один раз,
-например `openssl rand -base64 32`, и сохраните его между restart/redeploy.
-Строка используется как пароль PBES2; Base64 не декодируется в raw AES key.
-Пакет проверяет наличие секрета, но не оценивает его энтропию.
-Не используйте для этой настройки OAuth client secret: это отдельные назначения.
-
-Все реплики одного BFF используют одинаковые Redis, `ApplicationName`, `EnvironmentName`,
-`KeyNamespace` и `EncryptionKey`. `EnvironmentName` берётся из окружения хоста при регистрации из секции.
-Сегменты Redis prefix нормализуются в lowercase; имена клиентов — lowercase ASCII.
-Независимым приложениям и окружениям задайте отдельные scope и секреты.
-Изменение конфигурации требует перезапуска: BFF фиксирует startup snapshot.
+На всех репликах совпадают Redis, ApplicationName, EnvironmentName, KeyNamespace и EncryptionKey.
+EnvironmentName берётся у хоста, сегменты области Redis приводятся к lowercase.
+Разным приложениям и окружениям нужны отдельные области и секреты.
+Bff-конфигурация фиксируется при запуске.
 
 ## 4. Ключи и операции Redis
 
-Требуется Redis 6.2+ с GETDEL и Lua. Один host-owned `ConnectionMultiplexer` используется через DI.
+| Ключ | Назначение |
+| --- | --- |
+| `{application}:{environment}:{namespace}:{client}:sessions:{id}` | JWE сессии; TTL ограничен idle и absolute expiry |
+| `{application}:{environment}:{namespace}:data-protection` | Общий зашифрованный framework key ring без session TTL |
 
-| Redis key | Значение | Жизненный цикл |
-| --- | --- | --- |
-| `{application}:{environment}:{namespace}:{client}:sessions:{id}` | JWE с JSON сессии | TTL = минимум idle и absolute expiry |
-| `{application}:{environment}:{namespace}:data-protection` | Общий зашифрованный framework key ring | Без session TTL; сохраняется для cookies/OIDC/antiforgery |
+Idle по умолчанию — 20 минут от последнего принятого защищённого запроса; absolute lifetime — 8 часов.
+Статика, anonymous routes и antiforgery endpoint idle не продлевают.
+Активная SPA с polling поддерживает idle даже без действий пользователя.
 
-Lua CAS сравнивает точную ранее прочитанную JWE-строку. Изменение сессии создаёт новый JWE;
-неизменившееся состояние переиспользует прежнее значение.
-Поздний refresh не может восстановить удалённую сессию или затереть более новое состояние.
-Logout удаляет запись через GETDEL и использует токены, актуальные в момент удаления.
+Refresh начинается до истечения access token; окно — `min(30 секунд, 10% срока токена при получении)`.
+В одной реплике запросы ждут общую задачу, между репликами владение определяется Redis CAS.
+Отмена одного ожидающего не отменяет остальные запросы.
+После начала claim попытка имеет серверный бюджет 30 секунд; без подтверждённого владения token endpoint не вызывается.
+Неопределённый исход обмена не повторяется. Просроченный pending marker завершает сессию.
 
-Redis требует TLS, ACL, persistence и политики eviction, сохраняющей активные сессии и framework key ring.
-Потеря key ring делает существующие framework cookies/state нечитаемыми, даже если JWE сессий ещё доступны.
-Корневой `EncryptionKey` в Redis не записывается. Framework master keys там хранятся зашифрованными.
+Logout удаляет текущую запись через GETDEL, очищает cookie и пытается отозвать refresh token.
+Поздний refresh не восстанавливает удалённую сессию. Antiforgery/logout не ждут refresh.
+Удаление касается локальной сессии клиента; глобальную SSO-политику определяет IdP.
 
 ## 5. Ошибки и границы гарантий
 
-| Ситуация | Поведение |
+| Ситуация | Результат |
 | --- | --- |
-| `EncryptionKey` отсутствует или состоит из пробелов | Ошибка конфигурации при запуске |
-| Найден прежний открытый framework key ring | Ошибка запуска; нужен переход в новый namespace |
-| JWE сессии повреждён, зашифрован другим ключом, содержит неверный JSON или `SessionKey` | Сессия отклоняется, запись удаляется через CAS/GETDEL, API возвращает 401 |
-| Redis недоступен во время запроса | 503; независимой memory session нет |
-| У реплик разные секреты | Они не могут читать общие сессии/cookies; поддержка такого развёртывания отсутствует |
+| Нет EncryptionKey или найден открытый legacy framework key ring | Ошибка запуска |
+| Повреждённый JWE, другой ключ или неверный SessionKey | Сессия отклоняется; API возвращает 401 |
+| Redis недоступен | 503; memory fallback отсутствует |
+| Неопределённый исход refresh | Сессия закрывается; инициатор получает 503, следующий запрос — 401 |
+| Потерян ответ GETDEL | Logout возвращает 503; удалённая запись не восстанавливается |
 
-Значения сессий, ключи, токены и cookies не должны попадать в логи.
-Проверка наличия `EncryptionKey` не подтверждает его совпадение со всеми ранее зашифрованными записями.
+Отмена ожидания не отменяет уже отправленную команду Redis. При потерянном подтверждении записи
+может остаться недоступная сессия до TTL; пакет пытается отозвать известные credentials.
+Redis и IdP не образуют общую транзакцию: потерянный ответ IdP может оставить неизвестный BFF токен.
+Revocation выполняется best effort. Logout не отменяет уже отправленные API-запросы.
+
+Настройте TLS/ACL, persistence и eviction Redis с сохранением активных сессий и key ring.
+Потеря key ring делает cookies/state нечитаемыми. Секреты, cookies и токены не логируются.
 
 ## 6. Переход, замена секрета и backup
 
-Начиная с 7.0.0 прежний Data Protection формат серверных сессий из 6.x больше не читается; автоматического fallback нет.
-Для перехода на JWE или замены секрета:
+Версия 7.0.0 не читает прежний Data Protection формат сессий из 6.x.
+Для перехода или замены EncryptionKey:
 
-1. Остановите все старые реплики, чтобы они не меняли ту же область Redis другим форматом/ключом.
-2. Задайте новый `Bff:KeyNamespace` и согласованный `Bff:EncryptionKey` на всех репликах.
-3. Запустите BFF. Пользователям потребуется повторный вход.
-4. Удалите прежние session keys и framework key ring после отключения использовавших их реплик.
-   При необходимости отзовите старые grants у провайдера и учтите сохранённые backup.
+1. Остановите старые реплики.
+2. Задайте новый KeyNamespace и одинаковый EncryptionKey на всех репликах.
+3. Запустите BFF; пользователи входят заново.
+4. После отключения старых реплик удалите прежние session keys и framework key ring.
 
-Одновременная работа нескольких ключей и бесшовная ротация не реализованы.
-Старый backup способен вернуть удалённые сессии и прежние credentials в тот же Redis key:
-аутентифицированное шифрование не обеспечивает защиту от такого отката.
-План восстановления должен сбрасывать область сессий и/или отзывать grants.
+Бесшовная ротация нескольких ключей не реализована.
+Старый backup может вернуть удалённые сессии и credentials: при восстановлении сбрасывайте область сессий
+и/или отзывайте grants у IdP. Шифрование не защищает от отката backup.

@@ -11,17 +11,22 @@ public sealed class RefreshProtocolTests(InfrastructureFixture infrastructure)
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Refresh_AuthenticationTimePresent_PreservesOriginalAuthentication(bool changeAuthTime)
+    public async Task Refresh_AuthenticationTimePresent_PreservesOriginalAuthentication(
+        bool changeAuthTime
+    )
     {
         // Arrange
         var ct = TestContext.Current.CancellationToken;
         using var identity = new OidcWireMock(infrastructure)
-        { AuthenticationTime = DateTimeOffset.UtcNow.AddMinutes(-1).ToUnixTimeSeconds() };
+        {
+            AuthenticationTime = DateTimeOffset.UtcNow.AddMinutes(-1).ToUnixTimeSeconds(),
+        };
         await using var host = identity.CreateBff();
         using var browser = host.CreateBrowser();
         using var provider = identity.CreateIdentityBrowser();
         using var login = await browser.LoginAsync(provider);
-        if (changeAuthTime) identity.AuthenticationTime++;
+        if (changeAuthTime)
+            identity.AuthenticationTime++;
         host.Clock.Advance(TimeSpan.FromSeconds(110));
 
         // Act
@@ -29,7 +34,9 @@ public sealed class RefreshProtocolTests(InfrastructureFixture infrastructure)
 
         // Assert
         login.StatusCode.ShouldBe(HttpStatusCode.Redirect);
-        refresh.StatusCode.ShouldBe(changeAuthTime ? HttpStatusCode.Unauthorized : HttpStatusCode.OK);
+        refresh.StatusCode.ShouldBe(
+            changeAuthTime ? HttpStatusCode.Unauthorized : HttpStatusCode.OK
+        );
         identity.RefreshRequests.ShouldBe(1);
         identity.ActiveRefreshTokens.ShouldBe(changeAuthTime ? 0 : 1);
     }
@@ -41,11 +48,22 @@ public sealed class RefreshProtocolTests(InfrastructureFixture infrastructure)
         var ct = TestContext.Current.CancellationToken;
         using var identity = new OidcWireMock(infrastructure) { Role = "reader" };
         await using var host = identity.CreateBff();
-        host.ConfigureRoutes = routes => routes[0] = routes[0] with { AuthorizationPolicy = "Managers" };
-        await using var configured = host.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
-            services.AddAuthorization(options => options.AddPolicy("Managers", policy => policy.RequireRole("manager")))));
-        using var browser = configured.CreateClient(new WebApplicationFactoryClientOptions
-        { BaseAddress = BffApplicationFactory.Origin, AllowAutoRedirect = false });
+        host.ConfigureRoutes = routes =>
+            routes[0] = routes[0] with { AuthorizationPolicy = "Managers" };
+        await using var configured = host.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+                services.AddAuthorization(options =>
+                    options.AddPolicy("Managers", policy => policy.RequireRole("manager"))
+                )
+            )
+        );
+        using var browser = configured.CreateClient(
+            new WebApplicationFactoryClientOptions
+            {
+                BaseAddress = BffApplicationFactory.Origin,
+                AllowAutoRedirect = false,
+            }
+        );
         using var provider = identity.CreateIdentityBrowser();
         using var login = await browser.LoginAsync(provider);
 
@@ -73,7 +91,9 @@ public sealed class RefreshProtocolTests(InfrastructureFixture infrastructure)
     [InlineData("expired")]
     [InlineData("unsigned")]
     [InlineData("subject")]
-    public async Task Refresh_InvalidIdentityToken_InvalidatesSessionAndRevokesIssuedCredentials(string defect)
+    public async Task Refresh_InvalidIdentityToken_InvalidatesSessionAndRevokesIssuedCredentials(
+        string defect
+    )
     {
         // Arrange
         using var identity = new OidcWireMock(infrastructure);
@@ -85,8 +105,12 @@ public sealed class RefreshProtocolTests(InfrastructureFixture infrastructure)
         host.Clock.Advance(TimeSpan.FromSeconds(110));
 
         // Act
-        using var refresh = await browser.ApiAsync(cancellationToken: TestContext.Current.CancellationToken);
-        using var after = await browser.ApiAsync(cancellationToken: TestContext.Current.CancellationToken);
+        using var refresh = await browser.ApiAsync(
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        using var after = await browser.ApiAsync(
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         // Assert
         login.StatusCode.ShouldBe(HttpStatusCode.Redirect);
@@ -100,11 +124,16 @@ public sealed class RefreshProtocolTests(InfrastructureFixture infrastructure)
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Refresh_OptionalTokensOmitted_PreservesExistingCredentials(bool omitRefreshToken)
+    public async Task Refresh_OptionalTokensOmitted_PreservesExistingCredentials(
+        bool omitRefreshToken
+    )
     {
         // Arrange
         using var identity = new OidcWireMock(infrastructure)
-        { OmitRefreshIdentityToken = true, OmitRotatedRefreshToken = omitRefreshToken };
+        {
+            OmitRefreshIdentityToken = true,
+            OmitRotatedRefreshToken = omitRefreshToken,
+        };
         await using var host = identity.CreateBff();
         using var browser = host.CreateBrowser();
         using var identityBrowser = identity.CreateIdentityBrowser();
@@ -112,10 +141,16 @@ public sealed class RefreshProtocolTests(InfrastructureFixture infrastructure)
 
         // Act
         host.Clock.Advance(TimeSpan.FromSeconds(110));
-        using var first = await browser.ApiAsync(cancellationToken: TestContext.Current.CancellationToken);
+        using var first = await browser.ApiAsync(
+            cancellationToken: TestContext.Current.CancellationToken
+        );
         host.Clock.Advance(TimeSpan.FromSeconds(110));
-        using var second = await browser.ApiAsync(cancellationToken: TestContext.Current.CancellationToken);
-        using var logout = await browser.LogoutAsync(cancellationToken: TestContext.Current.CancellationToken);
+        using var second = await browser.ApiAsync(
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        using var logout = await browser.LogoutAsync(
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         // Assert
         login.StatusCode.ShouldBe(HttpStatusCode.Redirect);
@@ -139,7 +174,9 @@ public sealed class RefreshProtocolTests(InfrastructureFixture infrastructure)
         host.Clock.Advance(TimeSpan.FromSeconds(110));
 
         // Act
-        using var response = await browser.ApiAsync(cancellationToken: TestContext.Current.CancellationToken);
+        using var response = await browser.ApiAsync(
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         // Assert
         login.StatusCode.ShouldBe(HttpStatusCode.Redirect);
@@ -154,7 +191,9 @@ public sealed class RefreshProtocolTests(InfrastructureFixture infrastructure)
         // Arrange
         var ct = TestContext.Current.CancellationToken;
         using var identity = new OidcWireMock(infrastructure)
-        { ReleaseRefresh = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+        {
+            ReleaseRefresh = new(TaskCreationOptions.RunContinuationsAsynchronously),
+        };
         await using var host = identity.CreateBff();
         using var browser = host.CreateBrowser();
         using var identityBrowser = identity.CreateIdentityBrowser();
@@ -184,14 +223,17 @@ public sealed class RefreshProtocolTests(InfrastructureFixture infrastructure)
         // Arrange
         using var identity = new OidcWireMock(infrastructure) { EncryptIdentityTokens = true };
         await using var host = identity.CreateBff();
-        host.ConfigureOidc = options => options.TokenValidationParameters.TokenDecryptionKey = identity.EncryptionKey;
+        host.ConfigureOidc = options =>
+            options.TokenValidationParameters.TokenDecryptionKey = identity.EncryptionKey;
         using var browser = host.CreateBrowser();
         using var identityBrowser = identity.CreateIdentityBrowser();
 
         // Act
         using var login = await browser.LoginAsync(identityBrowser);
         host.Clock.Advance(TimeSpan.FromSeconds(110));
-        using var refresh = await browser.ApiAsync(cancellationToken: TestContext.Current.CancellationToken);
+        using var refresh = await browser.ApiAsync(
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         // Assert
         login.StatusCode.ShouldBe(HttpStatusCode.Redirect);

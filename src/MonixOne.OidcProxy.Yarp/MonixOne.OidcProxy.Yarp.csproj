@@ -5,7 +5,7 @@
         <RootNamespace>MonixOne.OidcProxy.Yarp</RootNamespace>
         <PackageTags>aspnetcore;bff;spa;yarp;oauth2;openid-connect;openiddict;redis</PackageTags>
         <PackageIcon>nuget-icon.png</PackageIcon>
-        <Version>7.0.0</Version>
+        <Version>8.0.0</Version>
         <Authors>Albert Starreveld; Shulyakovsky.E</Authors>
         <Company>MonixOne</Company>
         <Copyright>MonixOne contributors; upstream copyright retained</Copyright>
@@ -20,7 +20,7 @@
         <PackageProjectUrl>https://github.com/Shulyakovskiy/MonixOne.OidcProxy.Yarp</PackageProjectUrl>
         <PackageLicenseExpression>LGPL-3.0-only</PackageLicenseExpression>
         <PackageReadmeFile>README.md</PackageReadmeFile>
-        <PackageReleaseNotes>Breaking: Redis sessions are encrypted directly with jose-jwt using PBES2-HS256+A128KW and A256GCM. Bff:EncryptionKey is required. Session payloads are bound to their Redis key. Framework cookies, OIDC state and antiforgery retain an encrypted shared key ring in Redis. Stop old replicas, choose a new Bff:KeyNamespace and require users to sign in again. See the session migration guide.</PackageReleaseNotes>
+        <PackageReleaseNotes>Breaking: pass the root IConfiguration to AddOidcProxy. The package configures YARP, Redis and trusted forwarded headers automatically. Move OidcProxy.Client and OidcProxy.CookiePolicy metadata to Bff:Clients:&lt;client&gt;:Routes, using AllowAnonymous and CookiePolicy. Native ReverseProxy configuration stays separate. Explicit internal HTTP destinations are supported behind TLS termination; public origins and OIDC Authority remain HTTPS. The encrypted session format remains compatible with 7.0.0. Documentation and the sample host are simplified.</PackageReleaseNotes>
     </PropertyGroup>
     <ItemGroup>
         <FrameworkReference Include="Microsoft.AspNetCore.App" />

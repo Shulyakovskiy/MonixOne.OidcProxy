@@ -1,6 +1,6 @@
 using System.Net;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 namespace MonixOne.OidcProxy.Yarp.Tests;
 
@@ -13,7 +13,9 @@ public sealed class RefreshLogoutTests(InfrastructureFixture infrastructure)
         // Arrange
         var ct = TestContext.Current.CancellationToken;
         using var identity = new OidcWireMock(infrastructure)
-        { ReleaseRefresh = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+        {
+            ReleaseRefresh = new(TaskCreationOptions.RunContinuationsAsynchronously),
+        };
         var scope = Guid.NewGuid().ToString("N");
         await using var host = identity.CreateBff(scope);
         await using var replica = identity.CreateBff(scope);
@@ -21,8 +23,18 @@ public sealed class RefreshLogoutTests(InfrastructureFixture infrastructure)
         using var other = replica.CreateBrowser(handleCookies: false);
         using var provider = identity.CreateIdentityBrowser();
         using var login = await browser.LoginAsync(provider);
-        other.DefaultRequestHeaders.Add("Cookie", login.Headers.GetValues("Set-Cookie")
-            .Single(value => value.StartsWith(OidcProxyDefaults.CookieName("spa") + "=", StringComparison.Ordinal)).Split(';')[0]);
+        other.DefaultRequestHeaders.Add(
+            "Cookie",
+            login
+                .Headers.GetValues("Set-Cookie")
+                .Single(value =>
+                    value.StartsWith(
+                        OidcProxyDefaults.CookieName("spa") + "=",
+                        StringComparison.Ordinal
+                    )
+                )
+                .Split(';')[0]
+        );
         host.Clock.Advance(TimeSpan.FromSeconds(110));
         replica.Clock.Advance(TimeSpan.FromSeconds(110));
         var owner = browser.ApiAsync(cancellationToken: ct);
@@ -36,13 +48,17 @@ public sealed class RefreshLogoutTests(InfrastructureFixture infrastructure)
             using var response = await owner.WaitAsync(TimeSpan.FromSeconds(10), ct);
             status = response.StatusCode;
         });
-        using var rejected = await other.ApiAsync(cancellationToken: ct).WaitAsync(TimeSpan.FromSeconds(10), ct);
+        using var rejected = await other
+            .ApiAsync(cancellationToken: ct)
+            .WaitAsync(TimeSpan.FromSeconds(10), ct);
         identity.ReleaseRefresh.TrySetResult();
         using var repeated = await other.ApiAsync(cancellationToken: ct);
 
         // Assert: shutdown may abort its caller; the surviving replica must never retry redemption.
-        if (failure is not null) failure.ShouldBeAssignableTo<OperationCanceledException>();
-        else status.ShouldBe(HttpStatusCode.ServiceUnavailable);
+        if (failure is not null)
+            failure.ShouldBeAssignableTo<OperationCanceledException>();
+        else
+            status.ShouldBe(HttpStatusCode.ServiceUnavailable);
         login.StatusCode.ShouldBe(HttpStatusCode.Redirect);
         rejected.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
         repeated.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
@@ -56,7 +72,9 @@ public sealed class RefreshLogoutTests(InfrastructureFixture infrastructure)
         // Arrange
         var ct = TestContext.Current.CancellationToken;
         using var identity = new OidcWireMock(infrastructure)
-        { ReleaseRefresh = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+        {
+            ReleaseRefresh = new(TaskCreationOptions.RunContinuationsAsynchronously),
+        };
         await using var host = identity.CreateBff();
         using var browser = host.CreateBrowser();
         using var identityBrowser = identity.CreateIdentityBrowser();
@@ -78,7 +96,9 @@ public sealed class RefreshLogoutTests(InfrastructureFixture infrastructure)
             await infrastructure.Redis.UnpauseAsync(CancellationToken.None);
         }
         using var failed = await owner;
-        using var recovered = await browser.ApiAsync(cancellationToken: ct).WaitAsync(TimeSpan.FromSeconds(5), ct);
+        using var recovered = await browser
+            .ApiAsync(cancellationToken: ct)
+            .WaitAsync(TimeSpan.FromSeconds(5), ct);
 
         // Assert
         login.StatusCode.ShouldBe(HttpStatusCode.Redirect);
@@ -95,7 +115,9 @@ public sealed class RefreshLogoutTests(InfrastructureFixture infrastructure)
         // Arrange
         var ct = TestContext.Current.CancellationToken;
         using var identity = new OidcWireMock(infrastructure)
-        { ReleaseRefresh = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+        {
+            ReleaseRefresh = new(TaskCreationOptions.RunContinuationsAsynchronously),
+        };
         using var secondConnection = await infrastructure.ConnectRedisAsync();
         var scope = Guid.NewGuid().ToString("N");
         await using var first = identity.CreateBff(scope);
@@ -104,7 +126,10 @@ public sealed class RefreshLogoutTests(InfrastructureFixture infrastructure)
         using var replica = second.CreateBrowser(handleCookies: false);
         using var identityBrowser = identity.CreateIdentityBrowser();
         using var login = await browser.LoginAsync(identityBrowser);
-        var cookie = login.Headers.GetValues("Set-Cookie").Single(value => value.StartsWith("__Host-Http-oidcproxy.spa.session=")).Split(';')[0];
+        var cookie = login
+            .Headers.GetValues("Set-Cookie")
+            .Single(value => value.StartsWith("__Host-Http-oidcproxy.spa.session="))
+            .Split(';')[0];
         replica.DefaultRequestHeaders.Add("Cookie", cookie);
         first.Clock.Advance(TimeSpan.FromSeconds(110));
         second.Clock.Advance(TimeSpan.FromSeconds(110));
@@ -112,7 +137,10 @@ public sealed class RefreshLogoutTests(InfrastructureFixture infrastructure)
         // Act: hold the real HTTP response after redemption so both replicas compete.
         var owner = browser.ApiAsync(cancellationToken: ct);
         await identity.RefreshStarted.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
-        var requests = Enumerable.Range(0, 50).Select(index => (index % 2 == 0 ? browser : replica).ApiAsync(cancellationToken: ct)).ToArray();
+        var requests = Enumerable
+            .Range(0, 50)
+            .Select(index => (index % 2 == 0 ? browser : replica).ApiAsync(cancellationToken: ct))
+            .ToArray();
         identity.ReleaseRefresh.SetResult();
         var responses = await Task.WhenAll(requests.Prepend(owner));
 
@@ -120,19 +148,26 @@ public sealed class RefreshLogoutTests(InfrastructureFixture infrastructure)
         login.StatusCode.ShouldBe(HttpStatusCode.Redirect);
         responses.ShouldAllBe(response => response.StatusCode == HttpStatusCode.OK);
         identity.RefreshRequests.ShouldBe(1);
-        identity.BackendRequests.ShouldAllBe(request => request.Headers!["Authorization"].Single() == "Bearer " + identity.LastAccessToken);
-        foreach (var response in responses) response.Dispose();
+        identity.BackendRequests.ShouldAllBe(request =>
+            request.Headers!["Authorization"].Single() == "Bearer " + identity.LastAccessToken
+        );
+        foreach (var response in responses)
+            response.Dispose();
     }
 
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Logout_PendingRefresh_RemovesTheSessionAndRevokesLateCredentials(bool nativeForm)
+    public async Task Logout_PendingRefresh_RemovesTheSessionAndRevokesLateCredentials(
+        bool nativeForm
+    )
     {
         // Arrange
         var ct = TestContext.Current.CancellationToken;
         using var identity = new OidcWireMock(infrastructure)
-        { ReleaseRefresh = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+        {
+            ReleaseRefresh = new(TaskCreationOptions.RunContinuationsAsynchronously),
+        };
         await using var host = identity.CreateBff();
         using var browser = host.CreateBrowser();
         using var identityBrowser = identity.CreateIdentityBrowser();
@@ -142,7 +177,9 @@ public sealed class RefreshLogoutTests(InfrastructureFixture infrastructure)
         // Act: the refresh response is held after issuing the rotated credential.
         var owner = browser.ApiAsync(cancellationToken: ct);
         await identity.RefreshStarted.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
-        using var logout = await browser.LogoutAsync(nativeForm, ct).WaitAsync(TimeSpan.FromSeconds(5), ct);
+        using var logout = await browser
+            .LogoutAsync(nativeForm, ct)
+            .WaitAsync(TimeSpan.FromSeconds(5), ct);
         identity.ReleaseRefresh.SetResult();
         using var refreshedRequest = await owner;
         using var after = await browser.ApiAsync(cancellationToken: ct);
@@ -191,7 +228,9 @@ public sealed class RefreshLogoutTests(InfrastructureFixture infrastructure)
     [InlineData("500")]
     [InlineData("503")]
     [InlineData("malformed")]
-    public async Task Refresh_ErrorOrAmbiguousResponse_EndsSessionWithoutRedemptionRetry(string failure)
+    public async Task Refresh_ErrorOrAmbiguousResponse_EndsSessionWithoutRedemptionRetry(
+        string failure
+    )
     {
         // Arrange
         var ct = TestContext.Current.CancellationToken;
@@ -209,7 +248,10 @@ public sealed class RefreshLogoutTests(InfrastructureFixture infrastructure)
 
         // Assert
         login.StatusCode.ShouldBe(HttpStatusCode.Redirect);
-        first.StatusCode.ShouldBeOneOf(HttpStatusCode.Unauthorized, HttpStatusCode.ServiceUnavailable);
+        first.StatusCode.ShouldBeOneOf(
+            HttpStatusCode.Unauthorized,
+            HttpStatusCode.ServiceUnavailable
+        );
         next.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
         identity.RefreshRequests.ShouldBe(1);
         identity.BackendRequests.ShouldBeEmpty();
@@ -222,7 +264,9 @@ public sealed class RefreshLogoutTests(InfrastructureFixture infrastructure)
         // Arrange
         var ct = TestContext.Current.CancellationToken;
         using var identity = new OidcWireMock(infrastructure)
-        { ReleaseRefresh = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+        {
+            ReleaseRefresh = new(TaskCreationOptions.RunContinuationsAsynchronously),
+        };
         await using var host = identity.CreateBff();
         using var browser = host.CreateBrowser();
         using var identityBrowser = identity.CreateIdentityBrowser();

@@ -1,23 +1,29 @@
 using System.Security.Claims;
-using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Antiforgery;
-using Microsoft.AspNetCore.Authorization;
-using Yarp.ReverseProxy.Model;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using MonixOne.OidcProxy.Yarp.Sessions;
 using StackExchange.Redis;
+using Yarp.ReverseProxy.Model;
 
 namespace MonixOne.OidcProxy.Yarp.Security;
 
 internal sealed class BffRequestMiddleware(RequestDelegate next, ILoggerFactory loggerFactory)
 {
-    private readonly ILogger _logger = loggerFactory.CreateLogger("MonixOne.OidcProxy.Yarp.Session");
+    private readonly ILogger _logger = loggerFactory.CreateLogger(
+        "MonixOne.OidcProxy.Yarp.Session"
+    );
+
     internal static void Register(IServiceCollection services)
     {
-        services.AddAuthorization(authorization => authorization.AddPolicy(BffConstants.AuthorizationPolicy,
-            policy => policy.RequireAuthenticatedUser()));
+        services.AddAuthorization(authorization =>
+            authorization.AddPolicy(
+                BffConstants.AuthorizationPolicy,
+                policy => policy.RequireAuthenticatedUser()
+            )
+        );
         services.AddAntiforgery(antiforgery =>
         {
             antiforgery.Cookie.Name = "__Host-Http-oidcproxy.session.csrf";
@@ -33,10 +39,10 @@ internal sealed class BffRequestMiddleware(RequestDelegate next, ILoggerFactory 
         var endpoint = context.GetEndpoint();
         var client = endpoint?.Metadata.GetMetadata<BffClient>();
         var route = endpoint?.Metadata.GetMetadata<RouteModel>()?.Config;
+        var binding = route is null ? null : clients.ByRoute.GetValueOrDefault(route.RouteId);
         if (route is not null)
         {
-            if (route.Metadata?.TryGetValue(OidcProxyDefaults.ClientMetadataKey, out var name) == true)
-                clients.ByName.TryGetValue(name, out client);
+            client = binding?.Client;
             if (client is null)
             {
                 if (clients.Find(context.Request) is not null)
@@ -48,7 +54,10 @@ internal sealed class BffRequestMiddleware(RequestDelegate next, ILoggerFactory 
                 return;
             }
         }
-        if (client is null || route is null && endpoint?.Metadata.Contains(BffConstants.ApiMetadata) != true)
+        if (
+            client is null
+            || route is null && endpoint?.Metadata.Contains(BffConstants.ApiMetadata) != true
+        )
         {
             await next(context);
             return;
@@ -58,12 +67,13 @@ internal sealed class BffRequestMiddleware(RequestDelegate next, ILoggerFactory 
             context.Response.StatusCode = StatusCodes.Status403Forbidden;
             return;
         }
-        // Explicit anonymous YARP routes serve assets/public data without a session.
+        // Explicit anonymous BFF bindings serve assets/public data without a session.
         // Managed-route transforms remove BFF credentials; an explicit cookie
         // policy may carry separately namespaced application correlation cookies.
-        if (route is not null && endpoint?.Metadata.GetMetadata<IAllowAnonymous>() is not null)
+        if (binding?.Options.AllowAnonymous == true)
         {
-            if (route.Metadata?.ContainsKey(OidcProxyDefaults.CookiePolicyMetadataKey) == true) SetNoStore(context);
+            if (binding.Options.CookiePolicy is not null)
+                SetNoStore(context);
             await next(context);
             return;
         }
@@ -71,8 +81,12 @@ internal sealed class BffRequestMiddleware(RequestDelegate next, ILoggerFactory 
         SetNoStore(context);
         var origin = context.Request.Headers.Origin;
         var fetchSite = context.Request.Headers["Sec-Fetch-Site"];
-        if (origin.Count > 1 || origin.Count == 1 && origin[0] != options.PublicOrigin!.GetLeftPart(UriPartial.Authority) ||
-            fetchSite.Count > 0 && fetchSite != "same-origin")
+        if (
+            origin.Count > 1
+            || origin.Count == 1
+                && origin[0] != options.PublicOrigin!.GetLeftPart(UriPartial.Authority)
+            || fetchSite.Count > 0 && fetchSite != "same-origin"
+        )
         {
             context.Response.StatusCode = StatusCodes.Status403Forbidden;
             return;
@@ -85,18 +99,25 @@ internal sealed class BffRequestMiddleware(RequestDelegate next, ILoggerFactory 
             context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
             return;
         }
-        var hasCsrfHeader = context.Request.Headers["X-CSRF"].Count == 1 && context.Request.Headers["X-CSRF"] == "1";
+        var hasCsrfHeader =
+            context.Request.Headers["X-CSRF"].Count == 1
+            && context.Request.Headers["X-CSRF"] == "1";
         if (!hasCsrfHeader)
         {
-            if (!HttpMethods.IsPost(context.Request.Method) ||
-                context.Request.Path != OidcProxyRoutes.Logout || !context.Request.HasFormContentType)
+            if (
+                !HttpMethods.IsPost(context.Request.Method)
+                || context.Request.Path != OidcProxyRoutes.Logout
+                || !context.Request.HasFormContentType
+            )
             {
                 context.Response.StatusCode = StatusCodes.Status403Forbidden;
                 return;
             }
             try
             {
-                await context.RequestServices.GetRequiredService<IAntiforgery>().ValidateRequestAsync(context);
+                await context
+                    .RequestServices.GetRequiredService<IAntiforgery>()
+                    .ValidateRequestAsync(context);
             }
             catch (AntiforgeryValidationException)
             {
@@ -112,12 +133,21 @@ internal sealed class BffRequestMiddleware(RequestDelegate next, ILoggerFactory 
         try
         {
             var id = context.User.FindFirstValue(BffConstants.SessionClaim);
-            if (id is not null && context.Request.Path != OidcProxyRoutes.Logout &&
-                context.Request.Path != OidcProxyRoutes.Antiforgery)
+            if (
+                id is not null
+                && context.Request.Path != OidcProxyRoutes.Logout
+                && context.Request.Path != OidcProxyRoutes.Antiforgery
+            )
             {
-                var snapshot = context.Items[BffConstants.SessionSnapshotItem] is ValueTuple<string, SessionSnapshot> cached &&
-                    cached.Item1 == client.Name && cached.Item2.Id == id ? cached.Item2 : null;
-                var ticket = await context.RequestServices.GetRequiredKeyedService<TokenSession>(client.Name)
+                var snapshot =
+                    context.Items[BffConstants.SessionSnapshotItem]
+                        is ValueTuple<string, SessionSnapshot> cached
+                    && cached.Item1 == client.Name
+                    && cached.Item2.Id == id
+                        ? cached.Item2
+                        : null;
+                var ticket = await context
+                    .RequestServices.GetRequiredKeyedService<TokenSession>(client.Name)
                     .GetActiveTicketAsync(id, context.RequestAborted, snapshot);
                 if (ticket is null)
                 {
@@ -130,20 +160,33 @@ internal sealed class BffRequestMiddleware(RequestDelegate next, ILoggerFactory 
             }
             // Authorization must use this BFF session and its refreshed claims rather than
             // a cached result from the host's default Bearer/Identity authentication scheme.
-            context.Features.Set<IAuthenticateResultFeature>(new BffAuthenticateResultFeature
-            {
-                AuthenticateResult = AuthenticateResult.Success(new AuthenticationTicket(
-                    context.User, authentication.Properties!, client.CookieScheme))
-            });
+            context.Features.Set<IAuthenticateResultFeature>(
+                new BffAuthenticateResultFeature
+                {
+                    AuthenticateResult = AuthenticateResult.Success(
+                        new AuthenticationTicket(
+                            context.User,
+                            authentication.Properties!,
+                            client.CookieScheme
+                        )
+                    ),
+                }
+            );
             await next(context);
         }
-        catch (Exception e) when (e is RedisException or RedisTimeoutException or SessionUnavailableException)
+        catch (Exception e)
+            when (e is RedisException or RedisTimeoutException or SessionUnavailableException)
         {
-            if (context.Response.HasStarted) throw;
-            _logger.LogError("BFF session unavailable. Failure type: {FailureType}", e.GetType().Name);
+            if (context.Response.HasStarted)
+                throw;
+            _logger.LogError(
+                "BFF session unavailable. Failure type: {FailureType}",
+                e.GetType().Name
+            );
             context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
         }
     }
+
     private static void SetNoStore(HttpContext context)
     {
         context.Response.Headers.CacheControl = "no-store";
@@ -153,7 +196,6 @@ internal sealed class BffRequestMiddleware(RequestDelegate next, ILoggerFactory 
             return Task.CompletedTask;
         });
     }
-
 }
 
 internal sealed class BffAuthenticateResultFeature : IAuthenticateResultFeature

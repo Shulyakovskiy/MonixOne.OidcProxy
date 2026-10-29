@@ -17,22 +17,34 @@ public sealed class InfrastructureCollection : ICollectionFixture<Infrastructure
 /// </summary>
 public sealed class InfrastructureFixture : IAsyncLifetime
 {
-    public RedisContainer Redis { get; } = new RedisBuilder("redis:8-alpine")
-        .WithWaitStrategy(Wait.ForUnixContainer().UntilExternalTcpPortIsAvailable(6379)).Build();
-    public PostgreSqlContainer PostgreSql { get; } = new PostgreSqlBuilder("postgres:17-alpine").Build();
+    public RedisContainer Redis { get; } =
+        new RedisBuilder("redis:8-alpine")
+            .WithWaitStrategy(Wait.ForUnixContainer().UntilExternalTcpPortIsAvailable(6379))
+            .Build();
+    public PostgreSqlContainer PostgreSql { get; } =
+        new PostgreSqlBuilder("postgres:17-alpine").Build();
     public ConnectionMultiplexer Connection { get; private set; } = null!;
     public X509Certificate2 Certificate { get; }
-    public string EncryptionKey { get; } = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+    public string EncryptionKey { get; } =
+        Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
 
     public InfrastructureFixture()
     {
         using var key = RSA.Create(2048);
-        var request = new CertificateRequest("CN=localhost", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        var request = new CertificateRequest(
+            "CN=localhost",
+            key,
+            HashAlgorithmName.SHA256,
+            RSASignaturePadding.Pkcs1
+        );
         var names = new SubjectAlternativeNameBuilder();
         names.AddDnsName("localhost");
         names.AddIpAddress(IPAddress.Loopback);
         request.CertificateExtensions.Add(names.Build());
-        Certificate = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddHours(-1), DateTimeOffset.UtcNow.AddDays(1));
+        Certificate = request.CreateSelfSigned(
+            DateTimeOffset.UtcNow.AddHours(-1),
+            DateTimeOffset.UtcNow.AddDays(1)
+        );
     }
 
     public async ValueTask InitializeAsync()
