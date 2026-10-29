@@ -7,7 +7,7 @@ A .NET 10 LTS Backend-for-Frontend for single-page applications, built on ASP.NE
 - OAuth tokens stay in protected server-side Redis tickets. The browser receives a Secure, HttpOnly, host-only session cookie.
 - Atomic cross-replica refresh coordination and logout invalidation; no retry of an ambiguous rotating refresh-token exchange.
 - Same-origin SPA endpoints with CSRF protection, server access-token forwarding to configured HTTPS YARP destinations, and no in-memory session fallback.
-- Verified interoperability with OpenIddict, including encrypted access tokens, refresh, revocation and logout.
+- Interoperability with OpenIddict, including encrypted access tokens, refresh, revocation and logout.
 
 Register a host-owned StackExchange.Redis `ConnectionMultiplexer` and standard YARP configuration, then call `AddOidcProxy(configuration.GetRequiredSection("Bff"))` and `UseOidcProxy`. Client registration is automatic from the Clients collection in that section. The public namespace is `MonixOne.OidcProxy.Yarp`; OIDC configuration uses the standard `OpenIdConnectOptions`.
 

@@ -6,11 +6,7 @@ BFF для SPA на **.NET 10 LTS**, ASP.NET Core OpenID Connect, **YARP** и Re
 
 Репозиторий основан на [OidcProxy.Net](https://github.com/oidcproxydotnet/OidcProxy.Net). Лицензия **LGPL-3.0-only** и upstream copyright сохранены. Сервисов приложения, authorization server или UI входа пакет не реализует.
 
-## Текущее состояние
-
-Пакет **не опубликован**. Подготовка и проверки ведутся в этом репозитории; автоматический publish после merge отключён. BR.Admin-Identity и BR.Identity в рамках этой работы не изменялись. Цель подключения — удалить Node BFF и использовать один общий OIDC/YARP BFF, без BR-specific коннекторов.
-
-Проверенные контракты и условия до переключения потребителя — [BR.Admin-Identity](docs/BR-ADMIN-IDENTITY.md). Перенос настроек эталонного пакета — [PACKAGE-SETTINGS.md](docs/PACKAGE-SETTINGS.md).
+Руководства: [сборка и публикация](docs/PACKAGE-SETTINGS.md), [проверки](docs/TESTING.md), [условия подключения BR.Admin-Identity](docs/BR-ADMIN-IDENTITY.md).
 
 ## Интерактивное руководство для SPA
 
@@ -52,7 +48,7 @@ Encrypted access tokens OpenIddict передаются без разбора. A
 dotnet pack src/MonixOne.OidcProxy.Yarp/MonixOne.OidcProxy.Yarp.csproj -c Release -o artifacts/nuget
 ```
 
-Эта команда создаёт локальные nupkg/snupkg. Для подключения сейчас используйте ProjectReference из этого репозитория или полученный локальный feed. Команды установки из nuget.org пока нет. Все версии зависимостей репозитория централизованы в `Directory.Packages.props`.
+Эта команда создаёт локальные nupkg/snupkg. Подключите ProjectReference на проект пакета или установите собранный nupkg из локального feed. Все версии зависимостей репозитория централизованы в `Directory.Packages.props`.
 
 ```json
 {
@@ -242,7 +238,7 @@ Logout атомарно выполняет GETDEL текущего ticket, за�
 | Endpoints | Фиксированный browser HTTP-контракт |
 | Forwarding | Стандартные YARP transforms и HTTPS destination validation |
 
-Public API и namespace: `MonixOne.OidcProxy.Yarp`; `ProxyOptions`, `OidcProxyClientOptions`, `OidcProxyDefaults`, `OidcProxyRoutes`, `AddOidcProxy`, `AddOidcProxyClient`, `UseOidcProxy`. Provider-specific packages, alternate proxy modes и общий mutable in-memory session cache удалены. OIDC настраивается штатным `OpenIdConnectOptions`, routing — штатным YARP.
+Public API и namespace: `MonixOne.OidcProxy.Yarp`; `ProxyOptions`, `OidcProxyClientOptions`, `OidcProxyDefaults`, `OidcProxyRoutes`, `AddOidcProxy`, `AddOidcProxyClient`, `UseOidcProxy`. OIDC настраивается штатным `OpenIdConnectOptions`, routing — штатным YARP.
 
 ## Проверка и публикация
 
@@ -255,8 +251,8 @@ dotnet test --project tests/MonixOne.OidcProxy.Yarp.Tests/MonixOne.OidcProxy.Yar
 dotnet pack src/MonixOne.OidcProxy.Yarp/MonixOne.OidcProxy.Yarp.csproj -c Release --no-build -o artifacts/nuget
 ```
 
-CI проверяет пакет, HTTP/concurrency/OpenIddict тесты, SPA и документацию. Workflow `.github/workflows/publish.yml` имеет только ручной `workflow_dispatch` для main и использует environment `production`, NuGet trusted publishing и `NuGet/login`. Автоматического запуска после merge нет. Публикация не запускалась; до завершения проверки BR.Admin-Identity её выполнять нельзя. `NUGET_USER` в production уже присутствует; значение не читалось. Создайте trusted publisher в NuGet для этого репозитория/workflow/environment; настройка другого репозитория не переносится автоматически. Публикация версии необратима: повышайте Version перед следующим релизом.
+CI выполняет build, HTTP/concurrency/OpenIddict тесты, проверки SPA/документации, pack и сборку sample. Workflow `.github/workflows/publish.yml` запускается вручную через `workflow_dispatch` на main, использует GitHub environment `production` и NuGet trusted publishing. Для него требуются secret `NUGET_USER` и trusted-publisher policy с точными repository/workflow/environment. Настройка описана в [PACKAGE-SETTINGS.md](docs/PACKAGE-SETTINGS.md). Перед выпуском проверьте потребителя в целевом окружении и задайте неиспользованную Version; опубликованную NuGet-версию заменить нельзя.
 
-### Upstream security issue
+### Security advisories
 
-Проверено 29.10.2026: [upstream #373 — Security Issue – CVE Assigned](https://github.com/oidcproxydotnet/OidcProxy.Net/issues/373) открыт. Автор сообщает о полученном CVE, но номер, affected versions и технические детали не опубликованы в issue; публичный advisory репозитория не найден. Исправленные здесь refresh/logout ошибки подтверждены regression tests. **Утверждать, что неназванный CVE исправлен, без disclosure нельзя.**
+Проверяйте NuGet advisories, production-зависимости SPA и [публичные upstream security advisories](https://github.com/oidcproxydotnet/OidcProxy.Net/security/advisories). [Upstream #373](https://github.com/oidcproxydotnet/OidcProxy.Net/issues/373) сообщает о CVE без опубликованного идентификатора и технического disclosure. Без этих данных нельзя сопоставить issue с конкретной версией или заявить об устранении указанного CVE.
