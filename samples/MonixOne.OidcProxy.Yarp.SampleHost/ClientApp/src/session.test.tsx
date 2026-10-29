@@ -1,6 +1,10 @@
 import type { ReactNode } from "react";
 import { act, renderHook } from "@testing-library/react";
-import { QueryClientProvider, focusManager, useQuery } from "@tanstack/react-query";
+import {
+  QueryClientProvider,
+  focusManager,
+  useQuery,
+} from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createBffQueryClient, sessionQueryOptions } from "./session";
 
@@ -21,7 +25,9 @@ it("renews only a visible session and stops polling after a 401", async () => {
     .mockResolvedValueOnce(new Response(JSON.stringify({ sub: ["user-1"] })))
     .mockResolvedValueOnce(new Response(null, { status: 401 }));
   const client = createBffQueryClient();
-  const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={client}>{children}</QueryClientProvider>
+  );
   const hook = renderHook(() => useQuery(sessionQueryOptions), { wrapper });
   await act(() => vi.advanceTimersByTimeAsync(1));
   expect(hook.result.current.data).toEqual({ sub: ["user-1"] });

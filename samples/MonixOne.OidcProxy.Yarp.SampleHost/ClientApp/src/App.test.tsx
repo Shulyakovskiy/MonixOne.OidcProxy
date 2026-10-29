@@ -5,7 +5,11 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { createBffQueryClient } from "./session";
 
 function renderApp() {
-  return render(<QueryClientProvider client={createBffQueryClient()}><App /></QueryClientProvider>);
+  return render(
+    <QueryClientProvider client={createBffQueryClient()}>
+      <App />
+    </QueryClientProvider>,
+  );
 }
 
 beforeEach(() => vi.stubGlobal("fetch", vi.fn()));

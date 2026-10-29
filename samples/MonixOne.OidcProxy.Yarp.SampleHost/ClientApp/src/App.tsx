@@ -1,7 +1,13 @@
 import { routes } from "./routes";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BffError, bffGet, submitLogout, type ApiStatus, type Claims } from "./bff";
+import {
+  BffError,
+  bffGet,
+  submitLogout,
+  type ApiStatus,
+  type Claims,
+} from "./bff";
 import { sessionQueryOptions, sessionQueryKey } from "./session";
 
 type Session =
@@ -12,7 +18,8 @@ type Session =
 
 export default function App() {
   const loginHref = `${routes.login}?${new URLSearchParams({
-    returnUrl: window.location.pathname + window.location.search + window.location.hash,
+    returnUrl:
+      window.location.pathname + window.location.search + window.location.hash,
   })}`;
   const queryClient = useQueryClient();
   const [apiPending, setApiPending] = useState(false);
@@ -22,19 +29,30 @@ export default function App() {
     mutationFn: submitLogout,
     retry: false,
     onMutate: () => queryClient.cancelQueries(),
-    onSuccess: () => { queryClient.clear(); setResult(null); },
+    onSuccess: () => {
+      queryClient.clear();
+      setResult(null);
+    },
     onError: (error) => setProblem(error.message),
   });
   const sessionQuery = useQuery({
     ...sessionQueryOptions,
     enabled: !logoutMutation.isPending && !logoutMutation.isSuccess,
   });
-  const session: Session = logoutMutation.isSuccess ? { status: "anonymous" }
-    : sessionQuery.isPending ? { status: "loading" }
-    : sessionQuery.isError ? { status: "error" }
-    : sessionQuery.data ? { status: "authenticated", claims: sessionQuery.data }
-    : { status: "anonymous" };
-  const pending = logoutMutation.isPending ? "logout" : apiPending ? "api" : null;
+  const session: Session = logoutMutation.isSuccess
+    ? { status: "anonymous" }
+    : sessionQuery.isPending
+      ? { status: "loading" }
+      : sessionQuery.isError
+        ? { status: "error" }
+        : sessionQuery.data
+          ? { status: "authenticated", claims: sessionQuery.data }
+          : { status: "anonymous" };
+  const pending = logoutMutation.isPending
+    ? "logout"
+    : apiPending
+      ? "api"
+      : null;
   const displayedProblem = problem ?? sessionQuery.error?.message ?? null;
 
   async function checkApi() {
@@ -42,18 +60,24 @@ export default function App() {
     setProblem(null);
     setResult(null);
     try {
-      setResult(await queryClient.fetchQuery({
-        queryKey: ["protected-api", sessionQuery.data?.sub?.[0]],
-        queryFn: ({ signal }) => bffGet<ApiStatus>(routes.apiStatus, signal),
-        staleTime: 0, gcTime: 0, retry: false,
-      }));
+      setResult(
+        await queryClient.fetchQuery({
+          queryKey: ["protected-api", sessionQuery.data?.sub?.[0]],
+          queryFn: ({ signal }) => bffGet<ApiStatus>(routes.apiStatus, signal),
+          staleTime: 0,
+          gcTime: 0,
+          retry: false,
+        }),
+      );
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
       if (error instanceof BffError && error.status === 401) {
         queryClient.clear();
         queryClient.setQueryData(sessionQueryKey, null);
       }
-      setProblem(error instanceof Error ? error.message : "Не удалось выполнить запрос.");
+      setProblem(
+        error instanceof Error ? error.message : "Не удалось выполнить запрос.",
+      );
     } finally {
       setApiPending(false);
     }
@@ -136,7 +160,9 @@ export default function App() {
             </>
           )}
           {session.status === "error" && (
-            <button onClick={() => void sessionQuery.refetch()}>Повторить</button>
+            <button onClick={() => void sessionQuery.refetch()}>
+              Повторить
+            </button>
           )}
         </div>
         {result && session.status === "authenticated" && (

@@ -9,7 +9,9 @@ import "./styles.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    {window.location.pathname === routes.docs ? <Documentation /> : (
+    {window.location.pathname === routes.docs ? (
+      <Documentation />
+    ) : (
       <QueryClientProvider client={createBffQueryClient()}>
         <App />
       </QueryClientProvider>
