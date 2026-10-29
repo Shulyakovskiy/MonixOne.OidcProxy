@@ -8,10 +8,9 @@ internal static class SessionPrincipal
     {
         var clone = principal.Clone();
         foreach (var identity in clone.Identities)
-            foreach (var claim in identity.FindAll(BffConstants.SessionClaim).ToArray())
-                identity.RemoveClaim(claim);
+        foreach (var claim in identity.FindAll(BffConstants.SessionClaim).ToArray())
+            identity.RemoveClaim(claim);
         ((ClaimsIdentity)clone.Identity!).AddClaim(new Claim(BffConstants.SessionClaim, id));
         return clone;
     }
-
 }

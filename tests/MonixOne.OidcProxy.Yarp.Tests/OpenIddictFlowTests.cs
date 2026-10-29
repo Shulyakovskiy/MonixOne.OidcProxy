@@ -5,8 +5,10 @@ using System.Text.Json;
 namespace MonixOne.OidcProxy.Yarp.Tests;
 
 [Collection("Infrastructure")]
-public sealed class OpenIddictFlowTests(InfrastructureFixture infrastructure, OpenIddictHost identity)
-    : IClassFixture<OpenIddictHost>
+public sealed class OpenIddictFlowTests(
+    InfrastructureFixture infrastructure,
+    OpenIddictHost identity
+) : IClassFixture<OpenIddictHost>
 {
     [Fact]
     public async Task Proxy_OpenIddictEncryptedAccessToken_ReachesAnAuthenticatedResourceApi()
@@ -14,7 +16,13 @@ public sealed class OpenIddictFlowTests(InfrastructureFixture infrastructure, Op
         // Arrange
         var ct = TestContext.Current.CancellationToken;
         var clientId = await identity.RegisterClientAsync();
-        await using var host = new BffApplicationFactory(infrastructure, identity.Origin, clientId, OpenIddictHost.Secret, identity.Origin);
+        await using var host = new BffApplicationFactory(
+            infrastructure,
+            identity.Origin,
+            clientId,
+            OpenIddictHost.Secret,
+            identity.Origin
+        );
         using var browser = host.CreateBrowser();
         using var identityBrowser = identity.CreateBrowser();
         using var identitySession = await identityBrowser.PostAsync("/test/session", null, ct);
@@ -30,8 +38,16 @@ public sealed class OpenIddictFlowTests(InfrastructureFixture infrastructure, Op
         login.StatusCode.ShouldBe(HttpStatusCode.Redirect);
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
         resource.GetProperty("subject").GetString().ShouldBe(OpenIddictHost.Subject);
-        resource.GetProperty("roles").EnumerateArray().Select(role => role.GetString()).ShouldContain("reader");
-        resource.GetProperty("scopes").EnumerateArray().Select(scope => scope.GetString()).ShouldContain("api.read");
+        resource
+            .GetProperty("roles")
+            .EnumerateArray()
+            .Select(role => role.GetString())
+            .ShouldContain("reader");
+        resource
+            .GetProperty("scopes")
+            .EnumerateArray()
+            .Select(scope => scope.GetString())
+            .ShouldContain("api.read");
         identity.ResourceTokens.Last().Split('.').Length.ShouldBe(5); // Real JWE; the BFF must not decode access-token claims.
         var claims = await me.Content.ReadFromJsonAsync<Dictionary<string, string[]>>(ct);
         claims!.ShouldNotContainKey("role");
@@ -43,7 +59,13 @@ public sealed class OpenIddictFlowTests(InfrastructureFixture infrastructure, Op
         // Arrange
         var ct = TestContext.Current.CancellationToken;
         var clientId = await identity.RegisterClientAsync();
-        await using var host = new BffApplicationFactory(infrastructure, identity.Origin, clientId, OpenIddictHost.Secret, identity.Origin);
+        await using var host = new BffApplicationFactory(
+            infrastructure,
+            identity.Origin,
+            clientId,
+            OpenIddictHost.Secret,
+            identity.Origin
+        );
         using var browser = host.CreateBrowser();
         using var identityBrowser = identity.CreateBrowser();
         using var session = await identityBrowser.PostAsync("/test/session", null, ct);
@@ -51,14 +73,17 @@ public sealed class OpenIddictFlowTests(InfrastructureFixture infrastructure, Op
         host.Clock.Advance(TimeSpan.FromSeconds(110));
 
         // Act
-        var responses = await Task.WhenAll(Enumerable.Range(0, 30).Select(_ => browser.ApiAsync(cancellationToken: ct)));
+        var responses = await Task.WhenAll(
+            Enumerable.Range(0, 30).Select(_ => browser.ApiAsync(cancellationToken: ct))
+        );
 
         // Assert
         session.StatusCode.ShouldBe(HttpStatusCode.OK);
         login.StatusCode.ShouldBe(HttpStatusCode.Redirect);
         responses.ShouldAllBe(response => response.StatusCode == HttpStatusCode.OK);
         identity.RefreshRequests[clientId].ShouldBe(1);
-        foreach (var response in responses) response.Dispose();
+        foreach (var response in responses)
+            response.Dispose();
     }
 
     [Theory]
@@ -66,12 +91,21 @@ public sealed class OpenIddictFlowTests(InfrastructureFixture infrastructure, Op
     [InlineData(true, null)]
     [InlineData(false, "/signed-out/complete?from=app#done")]
     [InlineData(true, "/signed-out/complete?from=app#done")]
-    public async Task Logout_RealOpenIddict_CompletesRpLogoutAndEndsTheBffSession(bool nativeForm, string? returnUrl)
+    public async Task Logout_RealOpenIddict_CompletesRpLogoutAndEndsTheBffSession(
+        bool nativeForm,
+        string? returnUrl
+    )
     {
         // Arrange
         var ct = TestContext.Current.CancellationToken;
         var clientId = await identity.RegisterClientAsync();
-        await using var host = new BffApplicationFactory(infrastructure, identity.Origin, clientId, OpenIddictHost.Secret, identity.Origin);
+        await using var host = new BffApplicationFactory(
+            infrastructure,
+            identity.Origin,
+            clientId,
+            OpenIddictHost.Secret,
+            identity.Origin
+        );
         using var browser = host.CreateBrowser();
         using var identityBrowser = identity.CreateBrowser();
         using var session = await identityBrowser.PostAsync("/test/session", null, ct);
@@ -99,7 +133,13 @@ public sealed class OpenIddictFlowTests(InfrastructureFixture infrastructure, Op
         // Arrange
         var ct = TestContext.Current.CancellationToken;
         var clientId = await identity.RegisterClientAsync(publicClient: true);
-        await using var host = new BffApplicationFactory(infrastructure, identity.Origin, clientId, OpenIddictHost.Secret, identity.Origin);
+        await using var host = new BffApplicationFactory(
+            infrastructure,
+            identity.Origin,
+            clientId,
+            OpenIddictHost.Secret,
+            identity.Origin
+        );
         using var browser = host.CreateBrowser();
         using var identityBrowser = identity.CreateBrowser();
         using var session = await identityBrowser.PostAsync("/test/session", null, ct);
@@ -119,7 +159,13 @@ public sealed class OpenIddictFlowTests(InfrastructureFixture infrastructure, Op
     {
         // Arrange
         var clientId = await identity.RegisterClientAsync();
-        await using var host = new BffApplicationFactory(infrastructure, identity.Origin, clientId, OpenIddictHost.Secret, identity.Origin);
+        await using var host = new BffApplicationFactory(
+            infrastructure,
+            identity.Origin,
+            clientId,
+            OpenIddictHost.Secret,
+            identity.Origin
+        );
         using var browser = host.CreateBrowser();
         using var identityBrowser = identity.CreateBrowser();
 

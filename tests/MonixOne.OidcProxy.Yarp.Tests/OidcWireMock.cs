@@ -48,8 +48,10 @@ internal sealed class OidcWireMock : IDisposable
     internal SymmetricSecurityKey EncryptionKey { get; } = new(RandomNumberGenerator.GetBytes(32));
     internal string LastAccessToken = string.Empty;
     internal string LastRefreshToken = string.Empty;
-    internal TaskCompletionSource RefreshStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    internal TaskCompletionSource RevocationCompleted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    internal TaskCompletionSource RefreshStarted { get; } =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    internal TaskCompletionSource RevocationCompleted { get; } =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
     internal TaskCompletionSource? ReleaseRefresh { get; set; }
     internal ConcurrentQueue<string> RevokedTokens { get; } = new();
     internal ConcurrentQueue<IRequestMessage> BackendRequests { get; } = new();
@@ -62,69 +64,164 @@ internal sealed class OidcWireMock : IDisposable
         var key = RSA.Create(2048);
         _keys.Add(key);
         _key = new RsaSecurityKey(key) { KeyId = "initial-key" };
-        Server = WireMockServer.Start(new WireMockServerSettings
-        {
-            UseSSL = true,
-            CertificateSettings = new WireMockCertificateSettings { X509Certificate = infrastructure.Certificate }
-        });
+        Server = WireMockServer.Start(
+            new WireMockServerSettings
+            {
+                UseSSL = true,
+                CertificateSettings = new WireMockCertificateSettings
+                {
+                    X509Certificate = infrastructure.Certificate,
+                },
+            }
+        );
         Origin = new Uri(Server.Urls[0]);
-        Server.Given(Request.Create().WithPath("/.well-known/openid-configuration").UsingGet())
-            .RespondWith(Response.Create().WithCallback(_ => Json(new
-            {
-                issuer = Origin.AbsoluteUri.TrimEnd('/'),
-                authorization_endpoint = Url("/authorize"),
-                token_endpoint = Url("/token"),
-                jwks_uri = Url("/jwks"),
-                end_session_endpoint = Url("/logout"),
-                revocation_endpoint = Url("/revoke"),
-                response_types_supported = new[] { "code" },
-                subject_types_supported = new[] { "public" },
-                id_token_signing_alg_values_supported = new[] { "RS256" },
-                token_endpoint_auth_methods_supported = new[] { "client_secret_post" }
-            })));
-        Server.Given(Request.Create().WithPath("/jwks").UsingGet()).RespondWith(Response.Create().WithCallback(_ =>
-            Json(new
-            {
-                keys = new[] { JsonWebKeyConverter.ConvertFromRSASecurityKey(
-                new RsaSecurityKey(_key.Rsa.ExportParameters(false)) { KeyId = _key.KeyId }) }
-            })));
-        Server.Given(Request.Create().WithPath("/authorize").UsingGet()).RespondWith(Response.Create().WithCallback(request =>
-        {
-            var query = QueryHelpers.ParseQuery(new Uri(request.Url).Query);
-            var code = Guid.NewGuid().ToString("N"); // Unique one-use credentials, not random business test data.
-            _codes[code] = (query["nonce"].ToString(), query["code_challenge"].ToString());
-            var response = new ResponseMessage { StatusCode = 302 };
-            response.AddHeader("Location", QueryHelpers.AddQueryString(query["redirect_uri"].ToString(),
-                new Dictionary<string, string?> { ["code"] = code, ["state"] = query["state"].ToString() }));
-            return response;
-        }));
-        Server.Given(Request.Create().WithPath("/token").UsingPost()).RespondWith(Response.Create().WithCallback(ExchangeAsync));
-        Server.Given(Request.Create().WithPath("/revoke").UsingPost()).RespondWith(Response.Create().WithCallback(request =>
-        {
-            var token = QueryHelpers.ParseQuery(request.Body ?? string.Empty)["token"].ToString();
-            RevokedTokens.Enqueue(token);
-            _refreshTokens.TryRemove(token, out _);
-            RevocationCompleted.TrySetResult();
-            return Json(new { });
-        }));
-        Server.Given(Request.Create().WithPath("/api/*")).RespondWith(Response.Create().WithCallback(request =>
-        {
-            BackendRequests.Enqueue(request);
-            var response = Json(new { service = "resource-api", subject = "user-1", environment = "Testing", utc = "2026-01-01T00:00:00Z" });
-            response.AddHeader("Set-Cookie", "downstream=must-not-reach-browser; Path=/");
-            return response;
-        }));
+        Server
+            .Given(Request.Create().WithPath("/.well-known/openid-configuration").UsingGet())
+            .RespondWith(
+                Response
+                    .Create()
+                    .WithCallback(_ =>
+                        Json(
+                            new
+                            {
+                                issuer = Origin.AbsoluteUri.TrimEnd('/'),
+                                authorization_endpoint = Url("/authorize"),
+                                token_endpoint = Url("/token"),
+                                jwks_uri = Url("/jwks"),
+                                end_session_endpoint = Url("/logout"),
+                                revocation_endpoint = Url("/revoke"),
+                                response_types_supported = new[] { "code" },
+                                subject_types_supported = new[] { "public" },
+                                id_token_signing_alg_values_supported = new[] { "RS256" },
+                                token_endpoint_auth_methods_supported = new[]
+                                {
+                                    "client_secret_post",
+                                },
+                            }
+                        )
+                    )
+            );
+        Server
+            .Given(Request.Create().WithPath("/jwks").UsingGet())
+            .RespondWith(
+                Response
+                    .Create()
+                    .WithCallback(_ =>
+                        Json(
+                            new
+                            {
+                                keys = new[]
+                                {
+                                    JsonWebKeyConverter.ConvertFromRSASecurityKey(
+                                        new RsaSecurityKey(_key.Rsa.ExportParameters(false))
+                                        {
+                                            KeyId = _key.KeyId,
+                                        }
+                                    ),
+                                },
+                            }
+                        )
+                    )
+            );
+        Server
+            .Given(Request.Create().WithPath("/authorize").UsingGet())
+            .RespondWith(
+                Response
+                    .Create()
+                    .WithCallback(request =>
+                    {
+                        var query = QueryHelpers.ParseQuery(new Uri(request.Url).Query);
+                        var code = Guid.NewGuid().ToString("N"); // Unique one-use credentials, not random business test data.
+                        _codes[code] = (
+                            query["nonce"].ToString(),
+                            query["code_challenge"].ToString()
+                        );
+                        var response = new ResponseMessage { StatusCode = 302 };
+                        response.AddHeader(
+                            "Location",
+                            QueryHelpers.AddQueryString(
+                                query["redirect_uri"].ToString(),
+                                new Dictionary<string, string?>
+                                {
+                                    ["code"] = code,
+                                    ["state"] = query["state"].ToString(),
+                                }
+                            )
+                        );
+                        return response;
+                    })
+            );
+        Server
+            .Given(Request.Create().WithPath("/token").UsingPost())
+            .RespondWith(Response.Create().WithCallback(ExchangeAsync));
+        Server
+            .Given(Request.Create().WithPath("/revoke").UsingPost())
+            .RespondWith(
+                Response
+                    .Create()
+                    .WithCallback(request =>
+                    {
+                        var token = QueryHelpers
+                            .ParseQuery(request.Body ?? string.Empty)["token"]
+                            .ToString();
+                        RevokedTokens.Enqueue(token);
+                        _refreshTokens.TryRemove(token, out _);
+                        RevocationCompleted.TrySetResult();
+                        return Json(new { });
+                    })
+            );
+        Server
+            .Given(Request.Create().WithPath("/api/*"))
+            .RespondWith(
+                Response
+                    .Create()
+                    .WithCallback(request =>
+                    {
+                        BackendRequests.Enqueue(request);
+                        var response = Json(
+                            new
+                            {
+                                service = "resource-api",
+                                subject = "user-1",
+                                environment = "Testing",
+                                utc = "2026-01-01T00:00:00Z",
+                            }
+                        );
+                        response.AddHeader(
+                            "Set-Cookie",
+                            "downstream=must-not-reach-browser; Path=/"
+                        );
+                        return response;
+                    })
+            );
     }
 
-    internal HttpClient CreateIdentityBrowser() => new(new HttpClientHandler
-    {
-        AllowAutoRedirect = false,
-        ServerCertificateCustomValidationCallback = (_, certificate, _, _) => certificate?.Thumbprint == _infrastructure.Certificate.Thumbprint
-    })
-    { BaseAddress = Origin };
+    internal HttpClient CreateIdentityBrowser() =>
+        new(
+            new HttpClientHandler
+            {
+                AllowAutoRedirect = false,
+                ServerCertificateCustomValidationCallback = (_, certificate, _, _) =>
+                    certificate?.Thumbprint == _infrastructure.Certificate.Thumbprint,
+            }
+        )
+        {
+            BaseAddress = Origin,
+        };
 
-    internal BffApplicationFactory CreateBff(string? keyNamespace = null, StackExchange.Redis.ConnectionMultiplexer? connection = null)
-        => new(_infrastructure, Origin, RegisteredClientId, ClientSecret, Origin, keyNamespace, connection);
+    internal BffApplicationFactory CreateBff(
+        string? keyNamespace = null,
+        StackExchange.Redis.ConnectionMultiplexer? connection = null
+    ) =>
+        new(
+            _infrastructure,
+            Origin,
+            RegisteredClientId,
+            ClientSecret,
+            Origin,
+            keyNamespace,
+            connection
+        );
 
     internal void RotateSigningKey()
     {
@@ -153,8 +250,16 @@ internal sealed class OidcWireMock : IDisposable
                     "429" => Json(new { error = "slow_down" }, 429),
                     "503" => Json(new { error = "temporarily_unavailable" }, 503),
                     "500" => Json(new { error = "server_error" }, 500),
-                    "malformed" => new ResponseMessage { StatusCode = 200, BodyData = new BodyData { BodyAsString = "{invalid-json", DetectedBodyType = BodyType.String } },
-                    _ => Json(new { error = "invalid_grant" }, 400)
+                    "malformed" => new ResponseMessage
+                    {
+                        StatusCode = 200,
+                        BodyData = new BodyData
+                        {
+                            BodyAsString = "{invalid-json",
+                            DetectedBodyType = BodyType.String,
+                        },
+                    },
+                    _ => Json(new { error = "invalid_grant" }, 400),
                 };
             }
             if (!_refreshTokens.TryRemove(form["refresh_token"].ToString(), out nonce))
@@ -163,26 +268,42 @@ internal sealed class OidcWireMock : IDisposable
         else
         {
             Interlocked.Increment(ref CodeRequests);
-            if (!_codes.TryRemove(form["code"].ToString(), out var code) ||
-                code.Challenge != Base64UrlEncoder.Encode(SHA256.HashData(Encoding.ASCII.GetBytes(form["code_verifier"].ToString()))))
+            if (
+                !_codes.TryRemove(form["code"].ToString(), out var code)
+                || code.Challenge
+                    != Base64UrlEncoder.Encode(
+                        SHA256.HashData(Encoding.ASCII.GetBytes(form["code_verifier"].ToString()))
+                    )
+            )
                 return Json(new { error = "invalid_grant" }, 400);
             nonce = code.Nonce;
         }
         LastAccessToken = "opaque-access-" + Guid.NewGuid().ToString("N");
-        LastRefreshToken = refreshing && OmitRotatedRefreshToken ? form["refresh_token"].ToString() : Guid.NewGuid().ToString("N");
-        if (IssueRefreshToken) _refreshTokens[LastRefreshToken] = nonce!;
-        var response = Json(new
-        {
-            access_token = InvalidTokenResponse == "missing-access-token" ? null : LastAccessToken,
-            refresh_token = !IssueRefreshToken || refreshing && OmitRotatedRefreshToken ? null : LastRefreshToken,
-            token_type = InvalidTokenResponse == "token-type" ? "mac" : "Bearer",
-            expires_in = InvalidTokenResponse == "expiration" ? 0 : AccessTokenLifetime,
-            id_token = refreshing && OmitRefreshIdentityToken ? null : CreateIdToken(nonce!)
-        });
+        LastRefreshToken =
+            refreshing && OmitRotatedRefreshToken
+                ? form["refresh_token"].ToString()
+                : Guid.NewGuid().ToString("N");
+        if (IssueRefreshToken)
+            _refreshTokens[LastRefreshToken] = nonce!;
+        var response = Json(
+            new
+            {
+                access_token = InvalidTokenResponse == "missing-access-token"
+                    ? null
+                    : LastAccessToken,
+                refresh_token = !IssueRefreshToken || refreshing && OmitRotatedRefreshToken
+                    ? null
+                    : LastRefreshToken,
+                token_type = InvalidTokenResponse == "token-type" ? "mac" : "Bearer",
+                expires_in = InvalidTokenResponse == "expiration" ? 0 : AccessTokenLifetime,
+                id_token = refreshing && OmitRefreshIdentityToken ? null : CreateIdToken(nonce!),
+            }
+        );
         if (refreshing)
         {
             RefreshStarted.TrySetResult();
-            if (ReleaseRefresh is not null) await ReleaseRefresh.Task;
+            if (ReleaseRefresh is not null)
+                await ReleaseRefresh.Task;
         }
         return response;
     }
@@ -192,23 +313,46 @@ internal sealed class OidcWireMock : IDisposable
         var claims = new List<Claim>
         {
             new("sub", InvalidIdToken == "subject" ? "other-user" : "user-1"),
-            new("nonce", InvalidIdToken == "nonce" ? "wrong-nonce" : nonce)
+            new("nonce", InvalidIdToken == "nonce" ? "wrong-nonce" : nonce),
         };
         if (AuthenticationTime is { } authTime)
-            claims.Add(new Claim("auth_time", authTime.ToString(CultureInfo.InvariantCulture), ClaimValueTypes.Integer64));
-        if (Role is not null) claims.Add(new Claim("role", Role));
-        return new JsonWebTokenHandler().CreateToken(new SecurityTokenDescriptor
-        {
-            Issuer = InvalidIdToken == "issuer" ? "https://wrong.example" : Origin.AbsoluteUri.TrimEnd('/'),
-            Audience = InvalidIdToken == "audience" ? "wrong-client" : RegisteredClientId,
-            Subject = new ClaimsIdentity(claims),
-            Expires = InvalidIdToken == "expired" ? DateTime.UtcNow.AddMinutes(-10) : DateTime.UtcNow.AddHours(1),
-            IssuedAt = DateTime.UtcNow.AddMinutes(-15),
-            NotBefore = DateTime.UtcNow.AddMinutes(-15),
-            SigningCredentials = InvalidIdToken == "unsigned" ? null : new SigningCredentials(_key, SecurityAlgorithms.RsaSha256),
-            EncryptingCredentials = EncryptIdentityTokens
-                ? new EncryptingCredentials(EncryptionKey, SecurityAlgorithms.Aes256KW, SecurityAlgorithms.Aes256CbcHmacSha512) : null
-        });
+            claims.Add(
+                new Claim(
+                    "auth_time",
+                    authTime.ToString(CultureInfo.InvariantCulture),
+                    ClaimValueTypes.Integer64
+                )
+            );
+        if (Role is not null)
+            claims.Add(new Claim("role", Role));
+        return new JsonWebTokenHandler().CreateToken(
+            new SecurityTokenDescriptor
+            {
+                Issuer =
+                    InvalidIdToken == "issuer"
+                        ? "https://wrong.example"
+                        : Origin.AbsoluteUri.TrimEnd('/'),
+                Audience = InvalidIdToken == "audience" ? "wrong-client" : RegisteredClientId,
+                Subject = new ClaimsIdentity(claims),
+                Expires =
+                    InvalidIdToken == "expired"
+                        ? DateTime.UtcNow.AddMinutes(-10)
+                        : DateTime.UtcNow.AddHours(1),
+                IssuedAt = DateTime.UtcNow.AddMinutes(-15),
+                NotBefore = DateTime.UtcNow.AddMinutes(-15),
+                SigningCredentials =
+                    InvalidIdToken == "unsigned"
+                        ? null
+                        : new SigningCredentials(_key, SecurityAlgorithms.RsaSha256),
+                EncryptingCredentials = EncryptIdentityTokens
+                    ? new EncryptingCredentials(
+                        EncryptionKey,
+                        SecurityAlgorithms.Aes256KW,
+                        SecurityAlgorithms.Aes256CbcHmacSha512
+                    )
+                    : null,
+            }
+        );
     }
 
     private static ResponseMessage Json(object value, int status = 200)
@@ -216,7 +360,11 @@ internal sealed class OidcWireMock : IDisposable
         var response = new ResponseMessage
         {
             StatusCode = status,
-            BodyData = new BodyData { BodyAsString = JsonSerializer.Serialize(value), DetectedBodyType = BodyType.String }
+            BodyData = new BodyData
+            {
+                BodyAsString = JsonSerializer.Serialize(value),
+                DetectedBodyType = BodyType.String,
+            },
         };
         response.AddHeader("Content-Type", "application/json");
         return response;
@@ -226,6 +374,7 @@ internal sealed class OidcWireMock : IDisposable
     {
         ReleaseRefresh?.TrySetResult();
         Server.Dispose();
-        foreach (var key in _keys) key.Dispose();
+        foreach (var key in _keys)
+            key.Dispose();
     }
 }

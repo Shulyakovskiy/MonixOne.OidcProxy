@@ -1,6 +1,6 @@
 using System.Net;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 namespace MonixOne.OidcProxy.Yarp.Tests;
 
@@ -34,8 +34,10 @@ public sealed class RedisMutationTests(InfrastructureFixture infrastructure)
         });
 
         // Assert
-        if (failure is not null) failure.ShouldBeAssignableTo<OperationCanceledException>();
-        else status.ShouldBe(HttpStatusCode.ServiceUnavailable);
+        if (failure is not null)
+            failure.ShouldBeAssignableTo<OperationCanceledException>();
+        else
+            status.ShouldBe(HttpStatusCode.ServiceUnavailable);
         identity.ActiveRefreshTokens.ShouldBe(0);
     }
 
@@ -54,8 +56,18 @@ public sealed class RedisMutationTests(InfrastructureFixture infrastructure)
         using var other = replica.CreateBrowser(handleCookies: false);
         using var provider = identity.CreateIdentityBrowser();
         using var login = await browser.LoginAsync(provider);
-        other.DefaultRequestHeaders.Add("Cookie", login.Headers.GetValues("Set-Cookie")
-            .Single(value => value.StartsWith(OidcProxyDefaults.CookieName("spa") + "=", StringComparison.Ordinal)).Split(';')[0]);
+        other.DefaultRequestHeaders.Add(
+            "Cookie",
+            login
+                .Headers.GetValues("Set-Cookie")
+                .Single(value =>
+                    value.StartsWith(
+                        OidcProxyDefaults.CookieName("spa") + "=",
+                        StringComparison.Ordinal
+                    )
+                )
+                .Split(';')[0]
+        );
         host.Clock.Advance(TimeSpan.FromSeconds(110));
         replica.Clock.Advance(TimeSpan.FromSeconds(110));
         var claim = gate.HoldNextSessionReply("EVAL", holdRecoveryReads: true);
@@ -152,8 +164,12 @@ public sealed class RedisMutationTests(InfrastructureFixture infrastructure)
         using var failed = await login.WaitAsync(TimeSpan.FromSeconds(10), ct);
         creation.Release.TrySetResult();
         using var after = await browser.ApiAsync(cancellationToken: ct);
-        var server = infrastructure.Connection.GetServer(infrastructure.Connection.GetEndPoints().Single());
-        var key = server.Keys(pattern: "test-spa:testing:" + host.KeyNamespace + ":spa:sessions:*").Single();
+        var server = infrastructure.Connection.GetServer(
+            infrastructure.Connection.GetEndPoints().Single()
+        );
+        var key = server
+            .Keys(pattern: "test-spa:testing:" + host.KeyNamespace + ":spa:sessions:*")
+            .Single();
         var ttl = await infrastructure.Connection.GetDatabase().KeyTimeToLiveAsync(key);
 
         // Assert
@@ -188,10 +204,14 @@ public sealed class RedisMutationTests(InfrastructureFixture infrastructure)
         creation.Release.TrySetResult();
         await Should.ThrowAsync<OperationCanceledException>(async () => await callback);
         await identity.RevocationCompleted.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
-        var server = infrastructure.Connection.GetServer(infrastructure.Connection.GetEndPoints().Single());
+        var server = infrastructure.Connection.GetServer(
+            infrastructure.Connection.GetEndPoints().Single()
+        );
 
         // Assert
-        server.Keys(pattern: "test-spa:testing:" + host.KeyNamespace + ":spa:sessions:*").ShouldBeEmpty();
+        server
+            .Keys(pattern: "test-spa:testing:" + host.KeyNamespace + ":spa:sessions:*")
+            .ShouldBeEmpty();
         identity.ActiveRefreshTokens.ShouldBe(0);
     }
 

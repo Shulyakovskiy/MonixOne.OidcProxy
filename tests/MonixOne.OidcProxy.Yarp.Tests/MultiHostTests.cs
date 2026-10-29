@@ -1,4 +1,6 @@
 using System.Net;
+using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MonixOne.OidcProxy.Yarp.Tests;
 
@@ -7,10 +9,91 @@ public sealed class MultiHostTests(InfrastructureFixture infrastructure)
 {
     private static readonly Uri SecondOrigin = new("https://second.example");
 
+    [Fact]
+    public async Task Proxy_AnonymousBffRoute_DoesNotOverrideNativeYarpPolicy()
+    {
+        // Arrange: BFF session requirements and native gateway authorization are independent.
+        var ct = TestContext.Current.CancellationToken;
+        using var identity = new OidcWireMock(infrastructure) { Role = "reader" };
+        await using var host = identity.CreateBff();
+        host.ConfigureClientOptions = options => options.Routes["api"].AllowAnonymous = true;
+        host.ConfigureRoutes = routes =>
+            routes[0] = routes[0] with { AuthorizationPolicy = "Managers" };
+        await using var configured = host.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+                services.AddAuthorization(options =>
+                    options.AddPolicy(
+                        "Managers",
+                        policy =>
+                            policy
+                                .AddAuthenticationSchemes(OidcProxyDefaults.CookieScheme("spa"))
+                                .RequireRole("manager")
+                    )
+                )
+            )
+        );
+        using var browser = configured.CreateClient(
+            new WebApplicationFactoryClientOptions
+            {
+                BaseAddress = BffApplicationFactory.Origin,
+                AllowAutoRedirect = false,
+            }
+        );
+        using var provider = identity.CreateIdentityBrowser();
+        using var login = await browser.LoginAsync(provider);
+
+        // Act
+        using var response = await browser.ApiAsync(cancellationToken: ct, csrf: false);
+
+        // Assert
+        login.StatusCode.ShouldBe(HttpStatusCode.Redirect);
+        response.StatusCode.ShouldBe(HttpStatusCode.Forbidden);
+        identity.BackendRequests.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Startup_RouteBoundToTwoBffClients_RejectsAmbiguousOwnership()
+    {
+        // Arrange
+        using var identity = new OidcWireMock(infrastructure);
+        await using var host = identity.CreateBff();
+        host.AddClient("second", SecondOrigin, identity);
+        host.ConfigureClientOptions = options => options.Routes["second"] = new();
+
+        // Act
+        var failure = Should.Throw<InvalidOperationException>(() => host.CreateBrowser());
+
+        // Assert
+        failure.Message.ShouldContain("exactly one client");
+        identity.BackendRequests.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Proxy_NativeAnonymousPolicy_DoesNotBypassProtectedBffRoute()
+    {
+        // Arrange
+        using var identity = new OidcWireMock(infrastructure);
+        await using var host = identity.CreateBff();
+        host.ConfigureRoutes = routes =>
+            routes[0] = routes[0] with { AuthorizationPolicy = "anonymous" };
+        using var browser = host.CreateBrowser();
+
+        // Act
+        using var response = await browser.ApiAsync(
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        // Assert
+        response.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
+        identity.BackendRequests.ShouldBeEmpty();
+    }
+
     [Theory]
     [InlineData("https://spa.example")]
     [InlineData("https://SPA.example:443")]
-    public async Task Startup_DuplicateEffectiveOrigins_RejectsAmbiguousClientSelection(string origin)
+    public async Task Startup_DuplicateEffectiveOrigins_RejectsAmbiguousClientSelection(
+        string origin
+    )
     {
         // Arrange
         using var first = new OidcWireMock(infrastructure);
@@ -28,7 +111,6 @@ public sealed class MultiHostTests(InfrastructureFixture infrastructure)
     }
 
     [Theory]
-    [InlineData("unknown-client")]
     [InlineData("foreign-host")]
     [InlineData("wildcard-host")]
     public async Task Startup_InvalidClientRouteBinding_RejectsConfiguration(string defect)
@@ -36,12 +118,15 @@ public sealed class MultiHostTests(InfrastructureFixture infrastructure)
         // Arrange
         using var identity = new OidcWireMock(infrastructure);
         await using var host = identity.CreateBff();
-        host.ConfigureRoutes = routes => routes[0] = defect switch
-        {
-            "unknown-client" => routes[0] with { Metadata = new Dictionary<string, string> { [OidcProxyDefaults.ClientMetadataKey] = "missing" } },
-            "foreign-host" => routes[0] with { Match = routes[0].Match with { Hosts = ["foreign.example"] } },
-            _ => routes[0] with { Match = routes[0].Match with { Hosts = ["*.example"] } }
-        };
+        host.ConfigureRoutes = routes =>
+            routes[0] = defect switch
+            {
+                "foreign-host" => routes[0] with
+                {
+                    Match = routes[0].Match with { Hosts = ["foreign.example"] },
+                },
+                _ => routes[0] with { Match = routes[0].Match with { Hosts = ["*.example"] } },
+            };
 
         // Act
         var failure = Should.Throw<InvalidOperationException>(() => host.CreateBrowser());
@@ -57,18 +142,25 @@ public sealed class MultiHostTests(InfrastructureFixture infrastructure)
         // Arrange
         using var identity = new OidcWireMock(infrastructure);
         await using var host = identity.CreateBff();
-        host.ConfigureRoutes = routes => routes.Add(routes[0] with
-        {
-            RouteId = "unmanaged",
-            Metadata = null,
-            Match = routes[0].Match with { Hosts = ["other-service.example"] }
-        });
+        host.ConfigureRoutes = routes =>
+            routes.Add(
+                routes[0] with
+                {
+                    RouteId = "unmanaged",
+                    Metadata = null,
+                    Match = routes[0].Match with { Hosts = ["other-service.example"] },
+                }
+            );
         using var browser = host.CreateBrowser(handleCookies: false);
         browser.DefaultRequestHeaders.Add("Cookie", "native=session");
 
         // Act
-        using var response = await browser.ApiAsync("https://other-service.example/api/status",
-            TestContext.Current.CancellationToken, csrf: false, bearer: "native-token");
+        using var response = await browser.ApiAsync(
+            "https://other-service.example/api/status",
+            TestContext.Current.CancellationToken,
+            csrf: false,
+            bearer: "native-token"
+        );
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -87,8 +179,21 @@ public sealed class MultiHostTests(InfrastructureFixture infrastructure)
         await provider.InitializeAsync();
         var firstId = await provider.RegisterClientAsync();
         var secondId = await provider.RegisterClientAsync(origin: SecondOrigin);
-        await using var host = new BffApplicationFactory(infrastructure, provider.Origin, firstId, OpenIddictHost.Secret, provider.Origin);
-        host.AddClient("second", SecondOrigin, provider.Origin, secondId, OpenIddictHost.Secret, provider.Origin);
+        await using var host = new BffApplicationFactory(
+            infrastructure,
+            provider.Origin,
+            firstId,
+            OpenIddictHost.Secret,
+            provider.Origin
+        );
+        host.AddClient(
+            "second",
+            SecondOrigin,
+            provider.Origin,
+            secondId,
+            OpenIddictHost.Secret,
+            provider.Origin
+        );
         using var browser = host.CreateBrowser();
         using var identity = provider.CreateBrowser();
         using var session = await identity.PostAsync("/test/session", null, ct);
@@ -105,7 +210,10 @@ public sealed class MultiHostTests(InfrastructureFixture infrastructure)
         using var providerLogout = await identity.GetAsync(logout.Headers.Location, ct);
         using var callback = await browser.GetAsync(providerLogout.Headers.Location, ct);
         using var firstAfter = await browser.ApiAsync(cancellationToken: ct);
-        using var secondAfter = await browser.ApiAsync(new Uri(SecondOrigin, "/api/status").AbsoluteUri, ct);
+        using var secondAfter = await browser.ApiAsync(
+            new Uri(SecondOrigin, "/api/status").AbsoluteUri,
+            ct
+        );
 
         // Assert
         loginA.StatusCode.ShouldBe(HttpStatusCode.Redirect);
@@ -136,7 +244,10 @@ public sealed class MultiHostTests(InfrastructureFixture infrastructure)
         using var loginA = await browser.LoginAsync(identity);
         using var loginB = await browser.LoginAsync(identity, "/portal", origin: SecondOrigin);
         using var apiA = await browser.ApiAsync(cancellationToken: ct);
-        using var apiB = await browser.ApiAsync(new Uri(SecondOrigin, "/portal/api/status").AbsoluteUri, ct);
+        using var apiB = await browser.ApiAsync(
+            new Uri(SecondOrigin, "/portal/api/status").AbsoluteUri,
+            ct
+        );
 
         // Assert
         loginA.StatusCode.ShouldBe(HttpStatusCode.Redirect);
@@ -146,8 +257,16 @@ public sealed class MultiHostTests(InfrastructureFixture infrastructure)
         apiB.StatusCode.ShouldBe(HttpStatusCode.OK);
         first.CodeRequests.ShouldBe(1);
         second.CodeRequests.ShouldBe(1);
-        first.BackendRequests.Single().Headers!["Authorization"].Single().ShouldBe("Bearer " + first.LastAccessToken);
-        second.BackendRequests.Single().Headers!["Authorization"].Single().ShouldBe("Bearer " + second.LastAccessToken);
+        first
+            .BackendRequests.Single()
+            .Headers!["Authorization"]
+            .Single()
+            .ShouldBe("Bearer " + first.LastAccessToken);
+        second
+            .BackendRequests.Single()
+            .Headers!["Authorization"]
+            .Single()
+            .ShouldBe("Bearer " + second.LastAccessToken);
     }
 
     [Fact]
@@ -163,12 +282,22 @@ public sealed class MultiHostTests(InfrastructureFixture infrastructure)
         using var attacker = host.CreateBrowser(handleCookies: false);
         using var identity = first.CreateIdentityBrowser();
         using var login = await browser.LoginAsync(identity);
-        var cookie = login.Headers.GetValues("Set-Cookie").Single(v => v.StartsWith(OidcProxyDefaults.CookieName("spa") + "="))
-            .Split(';')[0].Replace(OidcProxyDefaults.CookieName("spa"), OidcProxyDefaults.CookieName("second"), StringComparison.Ordinal);
+        var cookie = login
+            .Headers.GetValues("Set-Cookie")
+            .Single(v => v.StartsWith(OidcProxyDefaults.CookieName("spa") + "="))
+            .Split(';')[0]
+            .Replace(
+                OidcProxyDefaults.CookieName("spa"),
+                OidcProxyDefaults.CookieName("second"),
+                StringComparison.Ordinal
+            );
         attacker.DefaultRequestHeaders.Add("Cookie", cookie);
 
         // Act
-        using var replay = await attacker.ApiAsync(new Uri(SecondOrigin, "/api/status").AbsoluteUri, ct);
+        using var replay = await attacker.ApiAsync(
+            new Uri(SecondOrigin, "/api/status").AbsoluteUri,
+            ct
+        );
         using var original = await browser.ApiAsync(cancellationToken: ct);
 
         // Assert
@@ -192,10 +321,16 @@ public sealed class MultiHostTests(InfrastructureFixture infrastructure)
         using var identity = first.CreateIdentityBrowser();
         using var start = await browser.GetAsync(OidcProxyRoutes.Login, ct);
         using var authorization = await identity.GetAsync(start.Headers.Location, ct);
-        attacker.DefaultRequestHeaders.Add("Cookie", string.Join("; ", start.Headers.GetValues("Set-Cookie").Select(v => v.Split(';')[0])));
+        attacker.DefaultRequestHeaders.Add(
+            "Cookie",
+            string.Join("; ", start.Headers.GetValues("Set-Cookie").Select(v => v.Split(';')[0]))
+        );
 
         // Act
-        using var wrongHost = await attacker.GetAsync(new Uri(SecondOrigin, authorization.Headers.Location!.PathAndQuery), ct);
+        using var wrongHost = await attacker.GetAsync(
+            new Uri(SecondOrigin, authorization.Headers.Location!.PathAndQuery),
+            ct
+        );
         using var original = await browser.GetAsync(authorization.Headers.Location, ct);
 
         // Assert
@@ -208,13 +343,17 @@ public sealed class MultiHostTests(InfrastructureFixture infrastructure)
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Logout_OtherClientIsRefreshing_DoesNotInvalidateOrBlockItsSession(bool nativeForm)
+    public async Task Logout_OtherClientIsRefreshing_DoesNotInvalidateOrBlockItsSession(
+        bool nativeForm
+    )
     {
         // Arrange
         var ct = TestContext.Current.CancellationToken;
         using var first = new OidcWireMock(infrastructure);
         using var second = new OidcWireMock(infrastructure, "second-client")
-        { ReleaseRefresh = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+        {
+            ReleaseRefresh = new(TaskCreationOptions.RunContinuationsAsynchronously),
+        };
         await using var host = first.CreateBff();
         host.AddClient("second", SecondOrigin, second);
         using var browser = host.CreateBrowser();
@@ -226,11 +365,16 @@ public sealed class MultiHostTests(InfrastructureFixture infrastructure)
         await second.RefreshStarted.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
 
         // Act
-        using var logout = await browser.LogoutAsync(nativeForm, ct).WaitAsync(TimeSpan.FromSeconds(5), ct);
+        using var logout = await browser
+            .LogoutAsync(nativeForm, ct)
+            .WaitAsync(TimeSpan.FromSeconds(5), ct);
         second.ReleaseRefresh.SetResult();
         using var completed = await refreshing;
         using var loggedOut = await browser.ApiAsync(cancellationToken: ct);
-        using var unaffected = await browser.ApiAsync(new Uri(SecondOrigin, "/api/status").AbsoluteUri, ct);
+        using var unaffected = await browser.ApiAsync(
+            new Uri(SecondOrigin, "/api/status").AbsoluteUri,
+            ct
+        );
 
         // Assert
         logout.StatusCode.ShouldBe(HttpStatusCode.Redirect);
@@ -248,8 +392,14 @@ public sealed class MultiHostTests(InfrastructureFixture infrastructure)
     {
         // Arrange
         var ct = TestContext.Current.CancellationToken;
-        using var first = new OidcWireMock(infrastructure) { ReleaseRefresh = new(TaskCreationOptions.RunContinuationsAsynchronously) };
-        using var second = new OidcWireMock(infrastructure, "second-client") { ReleaseRefresh = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+        using var first = new OidcWireMock(infrastructure)
+        {
+            ReleaseRefresh = new(TaskCreationOptions.RunContinuationsAsynchronously),
+        };
+        using var second = new OidcWireMock(infrastructure, "second-client")
+        {
+            ReleaseRefresh = new(TaskCreationOptions.RunContinuationsAsynchronously),
+        };
         await using var host = first.CreateBff();
         host.AddClient("second", SecondOrigin, second);
         using var browser = host.CreateBrowser();
@@ -259,10 +409,19 @@ public sealed class MultiHostTests(InfrastructureFixture infrastructure)
         host.Clock.Advance(TimeSpan.FromSeconds(110));
         var ownerA = browser.ApiAsync(cancellationToken: ct);
         var ownerB = browser.ApiAsync(new Uri(SecondOrigin, "/api/status").AbsoluteUri, ct);
-        await Task.WhenAll(first.RefreshStarted.Task, second.RefreshStarted.Task).WaitAsync(TimeSpan.FromSeconds(10), ct);
+        await Task.WhenAll(first.RefreshStarted.Task, second.RefreshStarted.Task)
+            .WaitAsync(TimeSpan.FromSeconds(10), ct);
 
         // Act
-        var followers = Enumerable.Range(0, 20).Select(i => browser.ApiAsync(i % 2 == 0 ? "/api/status" : new Uri(SecondOrigin, "/api/status").AbsoluteUri, ct)).ToArray();
+        var followers = Enumerable
+            .Range(0, 20)
+            .Select(i =>
+                browser.ApiAsync(
+                    i % 2 == 0 ? "/api/status" : new Uri(SecondOrigin, "/api/status").AbsoluteUri,
+                    ct
+                )
+            )
+            .ToArray();
         first.ReleaseRefresh.SetResult();
         second.ReleaseRefresh.SetResult();
         var responses = await Task.WhenAll(followers.Append(ownerA).Append(ownerB));
@@ -271,9 +430,14 @@ public sealed class MultiHostTests(InfrastructureFixture infrastructure)
         responses.ShouldAllBe(response => response.StatusCode == HttpStatusCode.OK);
         first.RefreshRequests.ShouldBe(1);
         second.RefreshRequests.ShouldBe(1);
-        first.BackendRequests.ShouldAllBe(r => r.Headers!["Authorization"].Single() == "Bearer " + first.LastAccessToken);
-        second.BackendRequests.ShouldAllBe(r => r.Headers!["Authorization"].Single() == "Bearer " + second.LastAccessToken);
-        foreach (var response in responses) response.Dispose();
+        first.BackendRequests.ShouldAllBe(r =>
+            r.Headers!["Authorization"].Single() == "Bearer " + first.LastAccessToken
+        );
+        second.BackendRequests.ShouldAllBe(r =>
+            r.Headers!["Authorization"].Single() == "Bearer " + second.LastAccessToken
+        );
+        foreach (var response in responses)
+            response.Dispose();
     }
 
     [Theory]
@@ -305,11 +469,13 @@ public sealed class MultiHostTests(InfrastructureFixture infrastructure)
         // Arrange
         using var identity = new OidcWireMock(infrastructure);
         await using var host = identity.CreateBff();
-        host.ConfigureRoutes = routes => routes[0] = routes[0] with { Metadata = null };
+        host.ConfigureClientOptions = options => options.Routes.Clear();
         using var browser = host.CreateBrowser();
 
         // Act
-        using var response = await browser.ApiAsync(cancellationToken: TestContext.Current.CancellationToken);
+        using var response = await browser.ApiAsync(
+            cancellationToken: TestContext.Current.CancellationToken
+        );
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.Forbidden);
@@ -323,17 +489,38 @@ public sealed class MultiHostTests(InfrastructureFixture infrastructure)
         var ct = TestContext.Current.CancellationToken;
         using var identity = new OidcWireMock(infrastructure);
         await using var host = identity.CreateBff();
-        host.ConfigureRoutes = routes => routes.Add(routes[0] with { RouteId = "public", Match = new() { Hosts = [BffApplicationFactory.Origin.Authority], Path = "/api/public" }, AuthorizationPolicy = "anonymous" });
+        host.ConfigureClientOptions = options =>
+            options.Routes["public"] = new() { AllowAnonymous = true };
+        host.ConfigureRoutes = routes =>
+            routes.Add(
+                routes[0] with
+                {
+                    RouteId = "public",
+                    Match = new()
+                    {
+                        Hosts = [BffApplicationFactory.Origin.Authority],
+                        Path = "/api/public",
+                    },
+                }
+            );
         using var browser = host.CreateBrowser();
         browser.DefaultRequestHeaders.Add("Cookie", "input=secret");
 
         // Act
-        using var response = await browser.ApiAsync("/api/public", ct, csrf: false, bearer: "browser-token");
+        using var response = await browser.ApiAsync(
+            "/api/public",
+            ct,
+            csrf: false,
+            bearer: "browser-token"
+        );
 
         // Assert
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
         var forwarded = identity.BackendRequests.Single();
-        forwarded.Headers!.Keys.ShouldNotContain(k => k.Equals("Cookie", StringComparison.OrdinalIgnoreCase) || k.Equals("Authorization", StringComparison.OrdinalIgnoreCase));
+        forwarded.Headers!.Keys.ShouldNotContain(k =>
+            k.Equals("Cookie", StringComparison.OrdinalIgnoreCase)
+            || k.Equals("Authorization", StringComparison.OrdinalIgnoreCase)
+        );
         response.Headers.Contains("Set-Cookie").ShouldBeFalse();
     }
 }

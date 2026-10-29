@@ -6,7 +6,7 @@ export const initialSetup = {
   pathBase: "",
   authority: "https://identity.example.com",
   clientId: "spa-bff",
-  api: "https://api.example.com/",
+  api: "http://resource-api:8000/",
   application: "customer-portal",
   environment: "Production",
   namespace: "web",
@@ -28,7 +28,8 @@ export function validateSetup(setup: Setup): string[] {
     try {
       const url = new URL(setup[field]);
       if (
-        url.protocol !== "https:" ||
+        (url.protocol !== "https:" &&
+          !(field === "api" && url.protocol === "http:")) ||
         url.username ||
         url.password ||
         url.search ||
@@ -38,7 +39,7 @@ export function validateSetup(setup: Setup): string[] {
         throw new Error();
     } catch {
       errors.push(
-        `${label}: нужен абсолютный HTTPS URL без credentials, query и fragment${originOnly ? " и без пути" : ""}.`,
+        `${label}: нужен абсолютный ${field === "api" ? "HTTP/HTTPS" : "HTTPS"} URL без credentials, query и fragment${originOnly ? " и без пути" : ""}.`,
       );
     }
   }
@@ -110,6 +111,13 @@ export function createConfiguration(
   const clients = [setup, ...others];
   return JSON.stringify(
     {
+      AllowedHosts: clients
+        .map((client) => new URL(client.origin).hostname)
+        .join(";"),
+      ForwardedHeaders: {
+        KnownProxies: ["10.0.0.10"],
+        AllowedHosts: clients.map((client) => new URL(client.origin).hostname),
+      },
       Logging: {
         LogLevel: {
           "Microsoft.AspNetCore.Hosting.Diagnostics": "Warning",
@@ -130,8 +138,7 @@ export function createConfiguration(
                 client.pathBase || "/",
                 client.origin,
               ).pathname.replace(/\/+$/, ""),
-              SessionIdleTimeout: "00:20:00",
-              SessionAbsoluteTimeout: "08:00:00",
+              Routes: { [`${client.name}-api`]: { AllowAnonymous: false } },
               OpenIdConnect: {
                 Authority: client.authority,
                 ClientId: client.clientId,
@@ -151,7 +158,6 @@ export function createConfiguration(
                 Hosts: [new URL(client.origin).host],
                 Path: "/api/{**all}",
               },
-              Metadata: { "OidcProxy.Client": client.name },
             },
           ]),
         ),
@@ -171,20 +177,11 @@ export function createConfiguration(
 }
 
 export const hostCode = `using MonixOne.OidcProxy.Yarp;
-using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
-builder.Services.AddSingleton(sp => ConnectionMultiplexer.Connect(
-    sp.GetRequiredService<IConfiguration>().GetConnectionString("Redis")
-    ?? throw new InvalidOperationException("ConnectionStrings:Redis is required.")));
-builder.Services.AddReverseProxy()
-    .LoadFromConfig(builder.Configuration.GetRequiredSection("ReverseProxy"));
-builder.Services.AddOidcProxy(builder.Configuration.GetRequiredSection("Bff"));
+builder.Services.AddOidcProxy(builder.Configuration);
 
 var app = builder.Build();
-app.Services.GetRequiredService<ConnectionMultiplexer>();
-if (!app.Environment.IsDevelopment()) app.UseHsts();
-app.UseHttpsRedirection();
 app.UseOidcProxy();
 app.UseDefaultFiles();
 app.UseStaticFiles();
@@ -215,15 +212,21 @@ if (response.status === 401) {
 
 export function createCookieConfiguration(setup: Setup): string {
   const cluster = `${setup.name}-calendar`;
-  const metadata = {
-    "OidcProxy.Client": setup.name,
-    "OidcProxy.CookiePolicy": "calendar-google",
-  };
   return JSON.stringify(
     {
       Bff: {
         Clients: {
           [setup.name]: {
+            Routes: {
+              "google-start": {
+                AllowAnonymous: false,
+                CookiePolicy: "calendar-google",
+              },
+              "google-callback": {
+                AllowAnonymous: true,
+                CookiePolicy: "calendar-google",
+              },
+            },
             CookiePolicies: {
               "calendar-google": {
                 ClusterId: cluster,
@@ -245,17 +248,14 @@ export function createCookieConfiguration(setup: Setup): string {
               Path: "/calendar-api/connections/google/start",
               Methods: ["POST"],
             },
-            Metadata: metadata,
           },
           "google-callback": {
             ClusterId: cluster,
-            AuthorizationPolicy: "anonymous",
             Match: {
               Hosts: [new URL(setup.origin).host],
               Path: "/calendar-api/connections/google/callback",
               Methods: ["GET"],
             },
-            Metadata: metadata,
           },
         },
         Clusters: {
@@ -276,155 +276,154 @@ export const flows = {
   login: {
     title: "Вход",
     summary:
-      "Authorization Code + PKCE: SPA инициирует переход, BFF обменивает код по backchannel.",
+      "Браузер проходит вход у провайдера, BFF сохраняет токены в Redis.",
     steps: [
       [
         "Браузер → BFF",
-        "Пользователь открывает /.auth/login на origin своей SPA. BFF выбирает зарегистрированный клиент по HTTPS host/port и его PathBase, затем именованную OIDC-схему. ASP.NET Core создаёт state, nonce, PKCE verifier и временные correlation/nonce cookies. Без returnUrl возврат идёт к корню приложения. Локальный returnUrl сохраняет deep link, query и fragment; ASP.NET Core проверяет его и BFF защищает в state.",
-        "В браузере нет client secret или code verifier, доступного JavaScript.",
+        "SPA открывает /.auth/login обычной навигацией. BFF выбирает клиента по публичному origin и PathBase; framework создаёт state, nonce и PKCE.",
+        "Локальный returnUrl позволяет вернуться на нужную страницу SPA.",
       ],
       [
         "BFF → OpenID Provider",
-        "Браузер перенаправляется на authorization endpoint из discovery. Передаются client_id, redirect_uri, response_type=code, scope и code_challenge S256. Пользователь входит на стороне провайдера.",
-        "Провайдер проверяет точный redirect URI и регистрацию confidential client.",
+        "Браузер переходит на authorization endpoint. Пользователь входит на стороне провайдера.",
+        "Провайдеру нужны зарегистрированный confidential client и точный callback URI.",
       ],
       [
         "Provider → BFF callback",
-        "Провайдер возвращает code и state на /.auth/login/callback. Framework проверяет state и correlation, затем BFF один раз обменивает code с client secret и PKCE verifier.",
-        "Код не передаётся SPA. Не повторяйте обмен после неопределённого сетевого исхода.",
+        "Callback получает code/state. Framework проверяет correlation, а BFF обменивает code с client secret и PKCE verifier.",
+        "Неопределённый исход обмена не повторяется.",
       ],
       [
         "BFF → Redis → браузер",
-        "Framework проверяет ID token: подпись, issuer, audience, lifetime и nonce. JSON сессии с полным ticket и токенами шифруется напрямую через jose-jwt ключом Bff:EncryptionKey и записывается в Redis как JWE. Браузеру выдаётся защищённая framework cookie со случайной ссылкой, затем redirect к корню приложения.",
-        "Session cookie: Secure, HttpOnly, SameSite=Strict, Path=/, без Domain. Временные OIDC cookies имеют необходимые framework-настройки для внешнего callback.",
+        "После проверки ID token BFF записывает зашифрованную сессию в Redis. Браузер получает cookie со случайной ссылкой и возвращается в SPA.",
+        "Cookie: Secure, HttpOnly, SameSite=Strict. OAuth-токены остаются на сервере.",
       ],
       [
         "React → /.auth/me",
-        "После загрузки SPA TanStack Query получает claims через same-origin fetch с X-CSRF: 1. Ответ не содержит access_token, refresh_token, id_token или session reference. Anonymous session возвращает 401.",
-        "Claims подходят для UI. Доступ к ресурсам проверяет API по access token.",
+        "SPA получает claims через same-origin fetch с X-CSRF: 1. Без сессии возвращается 401.",
+        "Claims нужны UI; права на ресурсы проверяет API.",
       ],
     ],
   },
   api: {
     title: "Запрос API",
-    summary:
-      "У каждой SPA свой публичный origin с BFF endpoints; внутренний API получает только серверный Bearer token.",
+    summary: "SPA отправляет cookie, внутренний API получает серверный Bearer.",
     steps: [
       [
         "SPA → /api/…",
-        "fetch использует credentials: same-origin и X-CSRF: 1 даже для GET. Браузер автоматически прикладывает HttpOnly cookie. SPA не добавляет Authorization и не обращается к Resource API напрямую.",
-        "Custom header требует preflight для cross-origin запроса. BFF также отклоняет чужой Origin и Sec-Fetch-Site.",
+        "Для защищённых API SPA использует credentials: same-origin и X-CSRF: 1, включая GET.",
+        "Чужой Origin или Sec-Fetch-Site отклоняется.",
       ],
       [
         "BFF → Redis",
-        "Проверяется собственная именованная cookie-схема клиента и существование защищённого серверного ticket. Принципал из другой Bearer/Identity middleware не заменяет BFF session. При необходимости BFF координирует refresh.",
-        "Redis недоступен → 503, без memory fallback. Нет сессии → 401; для API нет redirect на HTML login.",
+        "BFF проверяет свою cookie и серверную сессию. При необходимости выполняется refresh.",
+        "Нет сессии — 401; Redis недоступен — 503.",
       ],
       [
         "YARP → Resource API",
-        "Проксируются только явно сконфигурированные YARP destinations по HTTPS с проверкой TLS. Входящий Authorization и BFF cookies удаляются. Явная CookiePolicy может передать только отдельно namespaced cookies приложения в выбранный cluster. YARP добавляет access token из серверного ticket. Query/fragment/userinfo в destination запрещены.",
-        "Не стройте destination из URL пользователя и не отключайте проверку сертификатов.",
+        "YARP удаляет browser Cookie/Authorization и добавляет access token из серверной сессии. Destination берётся из конфигурации.",
+        "Внутренний HTTP работает без флагов; HTTPS проверяет сертификат.",
       ],
       [
         "Resource API → SPA",
-        "API самостоятельно проверяет issuer, audience/resource, scopes и роли. YARP возвращает payload; Set-Cookie по умолчанию удаляется. Разрешённая CookiePolicy изолирует имя и Path прикладной cookie, сохраняя её opaque value. Authenticated ответы имеют Cache-Control: no-store. Неуспешная бизнес-операция не повторяется пакетом.",
-        "Уже отправленный запрос может завершиться после logout. Мгновенный отзыв выданного JWT требует механизма со стороны API/провайдера.",
+        "API проверяет issuer, audience, scopes и роли. BFF возвращает ответ без токенов; Set-Cookie по умолчанию удаляется.",
+        "Неуспешная бизнес-операция автоматически не повторяется.",
       ],
     ],
   },
   refresh: {
     title: "Продление",
     summary:
-      "JavaScript поддерживает актуальность UI. Refresh token использует только BFF, с координацией через Redis.",
+      "Refresh выполняет сервер. Параллельные запросы используют одного владельца обмена.",
     steps: [
       [
         "Активная SPA → BFF",
-        "Sample использует официальный @tanstack/react-query: проверка /.auth/me каждые 60 секунд только для authenticated SPA в видимой вкладке, а также после focus/reconnect при устаревании данных. Anonymous вкладка таймер не запускает.",
-        "Открытая видимая вкладка продлевает idle даже без кликов. Это активность HTTP-запросов, а не присутствие человека. Idle считается от последнего принятого защищённого запроса; absolute lifetime не меняется. В фоне браузер может приостановить таймер.",
+        "Sample проверяет /.auth/me раз в 60 секунд в видимой авторизованной вкладке и обновляет данные после focus/reconnect.",
+        "Polling продлевает idle даже без кликов, но не absolute lifetime.",
       ],
       [
         "Один владелец refresh",
-        "Окно refresh равно min(30 секунд, 10% срока access token при получении). BFF сохраняет RefreshAt в серверной сессии. Внутри реплики запросы client/session ждут одну задачу. Между репликами владение определяет Redis CAS; ожидание использует backoff с jitter.",
-        "In-process SemaphoreSlim не является гарантией между репликами. Пакет использует CAS по серверной записи.",
+        "Внутри реплики запросы ждут общую задачу. Между репликами владение определяется Redis CAS.",
+        "Отмена одного ожидающего не отменяет остальных.",
       ],
       [
         "BFF → token endpoint",
-        "Один владелец отправляет refresh_token grant с confidential credentials. Повторной отправки после timeout, 429, 5xx или invalid_grant нет. Серверный бюджет 30 секунд действует до отправки Redis claim. Отключение браузера после начала попытки не отменяет её завершение. При потерянном подтверждении сначала проверяется тот же operation ID. Остановка хоста отменяет бюджет.",
-        "Нельзя безопасно повторно использовать rotating refresh token после неизвестного исхода обмена.",
+        "Владелец отправляет refresh grant. После timeout или другого неопределённого исхода обмен не повторяется.",
+        "Серверный бюджет — 30 секунд; остановка хоста его отменяет.",
       ],
       [
         "BFF → Redis, CAS",
-        "Новые токены проверяются и записываются только если существует та же pending operation и не прошёл её deadline. Новый ID token проверяется, если провайдер его вернул. Если нового refresh token нет, сохраняется предыдущий.",
-        "Logout удалил запись → поздний refresh её не восстанавливает, известный новый refresh token отзывается best effort.",
+        "Новые токены сохраняются только для той же незавершённой операции в пределах её срока.",
+        "Logout удалил запись — поздний refresh её не восстанавливает.",
       ],
       [
         "Ошибка → повторный вход",
-        "invalid_grant или некорректные токены удаляют локальную сессию. Неопределённый сетевой исход закрывает её и возвращает 503 инициирующему запросу; следующий запрос получает 401. Просроченный pending marker после сбоя процесса не позволяет повторный refresh.",
-        "Redis и провайдер не образуют общую транзакцию. Потерянный ответ может оставить неизвестный токен у провайдера до истечения/отзыва grant.",
+        "Некорректный или неопределённый результат закрывает сессию. При неизвестном исходе инициатор получает 503, следующий запрос — 401.",
+        "Redis и IdP не образуют общую транзакцию.",
       ],
     ],
   },
   connections: {
     title: "Подключения",
     summary:
-      "Correlation cookies сторонних приложений передаются через явные CookiePolicies без передачи BFF cookies.",
+      "CookiePolicy передаёт техническую cookie приложения через границу BFF.",
     steps: [
       [
         "SPA → protected start",
-        "SPA вызывает API подключения с cookie и X-CSRF: 1. Route выбирает BFF client и CookiePolicy, привязанную к конкретному cluster. Backend получает server Bearer, но не cookie BFF.",
-        "Политика применяется к перечисленным routes; она не включает глобальную передачу cookies.",
+        "SPA вызывает start с BFF cookie и X-CSRF. Backend получает серверный Bearer и создаёт OAuth-транзакцию.",
+        "Политика относится только к выбранным routes и cluster.",
       ],
       [
         "Backend → namespaced cookie",
-        "Backend выдаёт разрешённую correlation cookie, например calendar_google_state. BFF меняет её публичное имя, делает host-only, Secure/HttpOnly и задаёт Path внутри SPA. Значение не изменяется.",
-        "Одинаковые backend names у разных приложений получают разные browser namespaces. Более строгий SameSite и короткий срок сохраняются.",
+        "BFF пропускает разрешённую cookie с namespace клиента/политики, публичным Path и Secure/HttpOnly. Значение сохраняется.",
+        "Одинаковые backend names разных приложений изолированы.",
       ],
       [
         "Browser → внешний provider",
-        "SPA открывает выданный backend URL провайдера. HttpOnly cookie хранится браузером автоматически; JavaScript её не читает и токены BFF не получает.",
-        "Для GET callback подходит Lax; cross-site POST требует явного None в политике и на backend.",
+        "Браузер открывает URL внешнего провайдера. Техническая HttpOnly cookie хранится автоматически.",
+        "Для GET callback подходит Lax; cross-site POST требует явного SameSite=None.",
       ],
       [
         "Provider → anonymous callback",
-        "Точный callback route допускает внешнюю навигацию без X-CSRF/BFF session. YARP восстанавливает только разрешённые original cookie names выбранной политики. На этот route не добавляется access token.",
-        "Сам backend проверяет state, связь с cookie, срок и однократность операции. Anonymous разрешается только для нужного callback.",
+        "На точном callback BFF восстанавливает разрешённое имя cookie. BFF session и access token не передаются.",
+        "Сам backend проверяет state, связь с cookie, срок и однократность операции.",
       ],
       [
         "Backend → clearCookie",
-        "Ответ очистки проходит через тот же namespace и Path и удаляет cookie браузера. Повтор или просроченный callback должен отклонить backend.",
-        "Количество приложений задаётся конфигурацией. Параллельность попыток одного подключения и browser cookie limits остаются ограничениями приложения и браузера.",
+        "Очистка проходит через тот же namespace/Path и удаляет browser cookie.",
+        "Параллельные попытки одного подключения должен поддерживать backend.",
       ],
     ],
   },
   logout: {
     title: "Выход",
     summary:
-      "Сначала прекращается локальная сессия, затем выполняются отзыв refresh token и RP-initiated logout.",
+      "Сначала удаляется локальная сессия, затем выполняется выход у провайдера.",
     steps: [
       [
         "React → antiforgery endpoint",
-        "SPA отменяет свои query и получает /.auth/antiforgery с X-CSRF: 1. Этот endpoint и logout не ждут refresh access token. Ответ содержит framework requestToken и имя form field.",
-        "GET /.auth/end-session не выполняет выход. Для browser redirect sample отправляет native POST form с antiforgery token.",
+        "SPA отменяет запросы, получает /.auth/antiforgery с X-CSRF и отправляет native POST form на /.auth/end-session.",
+        "Antiforgery/logout не ждут refresh.",
       ],
       [
         "BFF → Redis GETDEL",
-        "Авторизованный POST /.auth/end-session атомарно забирает текущий ticket и удаляет запись. Используется токен из записи на момент удаления, включая refresh, завершившийся во время запроса. Очищается cookie выбранного клиента. Локальные сессии других клиентов не удаляются; глобальная SSO-политика logout принадлежит провайдеру.",
-        "После разрешения logout разрыв клиентского соединения не отменяет локальное удаление; Redis операция ограничена таймаутом.",
+        "BFF удаляет сессию и забирает токены, актуальные на момент удаления. Затем очищается cookie клиента.",
+        "Локальные сессии других клиентов остаются изолированными.",
       ],
       [
         "BFF → revocation endpoint",
-        "BFF пытается отозвать текущий refresh token по backchannel с таймаутом 5 секунд. Ошибка отзыва логируется без токенов. Локальная запись уже удалена, поэтому известная cookie больше не авторизует новые запросы.",
-        "Отзыв best effort. При недоступном провайдере нельзя обещать глобальную мгновенную инвалидизацию всех credentials.",
+        "BFF пытается отозвать текущий refresh token с ограниченным таймаутом.",
+        "Отзыв best effort: недоступность IdP не возвращает удалённую сессию.",
       ],
       [
         "Браузер → Provider → callback",
-        "BFF инициирует стандартный RP-initiated logout с client_id, id_token_hint и фиксированным post_logout_redirect_uri. Провайдер завершает свою сессию и возвращает браузер на /.auth/signout-callback, затем к корню приложения.",
-        "Зарегистрируйте post-logout URI точно. fetch не выполняет нужную top-level навигацию на страницу провайдера.",
+        "Браузер проходит RP-initiated logout и возвращается на зарегистрированный signout callback.",
+        "Глобальную SSO-политику logout определяет IdP.",
       ],
       [
         "Другие вкладки",
-        "Следующий /.auth/me или API-запрос со старой cookie получает 401. UI удаляет кэш данных пользователя и предлагает вход. Незавершённый refresh не может создать прежнюю запись заново.",
-        "Sample не отправляет токены через BroadcastChannel/localStorage и не использует silent-renew iframe.",
+        "Следующий запрос со старой сессией получает 401. UI очищает пользовательский кэш и предлагает вход.",
+        "Logout не отменяет уже отправленные API-запросы.",
       ],
     ],
   },

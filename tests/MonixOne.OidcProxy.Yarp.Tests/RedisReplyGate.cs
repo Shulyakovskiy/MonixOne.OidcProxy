@@ -27,13 +27,15 @@ internal sealed class RedisReplyGate : IAsyncDisposable
         _accept = AcceptAsync();
     }
 
-    internal Task<ConnectionMultiplexer> ConnectAsync(int asyncTimeout = 10000)
-        => ConnectionMultiplexer.ConnectAsync(new ConfigurationOptions
-        {
-            EndPoints = { (IPEndPoint)_listener.LocalEndpoint },
-            AsyncTimeout = asyncTimeout,
-            Protocol = RedisProtocol.Resp2
-        });
+    internal Task<ConnectionMultiplexer> ConnectAsync(int asyncTimeout = 10000) =>
+        ConnectionMultiplexer.ConnectAsync(
+            new ConfigurationOptions
+            {
+                EndPoints = { (IPEndPoint)_listener.LocalEndpoint },
+                AsyncTimeout = asyncTimeout,
+                Protocol = RedisProtocol.Resp2,
+            }
+        );
 
     internal Reply HoldNextSessionReply(string command, bool holdRecoveryReads = false)
     {
@@ -83,7 +85,8 @@ internal sealed class RedisReplyGate : IAsyncDisposable
                     if (session && command == "GET" && reply?.Reached.Task.IsCompleted == true)
                     {
                         reply.RecoveryRead.TrySetResult();
-                        if (reply.HoldRecoveryReads) await reply.ReleaseRecoveryRead.Task.WaitAsync(ct);
+                        if (reply.HoldRecoveryReads)
+                            await reply.ReleaseRecoveryRead.Task.WaitAsync(ct);
                     }
                     await requests.Writer.WriteAsync((command, session), ct);
                     await server.GetStream().WriteAsync(frame, ct);
@@ -96,8 +99,11 @@ internal sealed class RedisReplyGate : IAsyncDisposable
                 {
                     var frame = await ReadFrameAsync(server.GetStream(), ct);
                     var reply = Volatile.Read(ref _reply);
-                    if (request.Session && request.Command == reply?.Command &&
-                        Interlocked.CompareExchange(ref reply.Claimed, 1, 0) == 0)
+                    if (
+                        request.Session
+                        && request.Command == reply?.Command
+                        && Interlocked.CompareExchange(ref reply.Claimed, 1, 0) == 0
+                    )
                     {
                         reply.Reached.TrySetResult();
                         await reply.Release.Task.WaitAsync(ct);
@@ -107,7 +113,9 @@ internal sealed class RedisReplyGate : IAsyncDisposable
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
-        catch (IOException) { /* Client disconnects are expected in fault tests. */ }
+        catch (IOException)
+        { /* Client disconnects are expected in fault tests. */
+        }
         catch (SocketException) when (ct.IsCancellationRequested) { }
     }
 
@@ -128,8 +136,10 @@ internal sealed class RedisReplyGate : IAsyncDisposable
             {
                 await stream.ReadExactlyAsync(single, ct);
                 buffer.WriteByte(single[0]);
-                if (single[0] == '\n') break;
-                if (single[0] != '\r') line.Append((char)single[0]);
+                if (single[0] == '\n')
+                    break;
+                if (single[0] != '\r')
+                    line.Append((char)single[0]);
             }
             if (prefix == '$' && int.Parse(line.ToString()) is var length && length >= 0)
             {
@@ -140,7 +150,8 @@ internal sealed class RedisReplyGate : IAsyncDisposable
             else if (prefix == '*')
             {
                 var count = int.Parse(line.ToString());
-                for (var i = 0; i < count; i++) await ReadPartAsync();
+                for (var i = 0; i < count; i++)
+                    await ReadPartAsync();
             }
         }
     }
@@ -159,9 +170,13 @@ internal sealed class RedisReplyGate : IAsyncDisposable
         internal string Command { get; } = command;
         internal bool HoldRecoveryReads { get; init; }
         internal int Claimed;
-        internal TaskCompletionSource Reached { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        internal TaskCompletionSource RecoveryRead { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        internal TaskCompletionSource ReleaseRecoveryRead { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        internal TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource Reached { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource RecoveryRead { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource ReleaseRecoveryRead { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource Release { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 }

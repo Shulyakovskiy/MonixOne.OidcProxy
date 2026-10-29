@@ -1,228 +1,87 @@
-# Проверка MonixOne.OidcProxy.Yarp
+# Проверки пакета
 
-Правила тестов — [tests/AGENTS.MD](../tests/AGENTS.MD).
-Стек: xUnit v3, Shouldly, WebApplicationFactory фактического sample Program, WireMock.Net для управляемых HTTPS fault-сценариев, настоящие Redis/PostgreSQL через Testcontainers.
+Правила тестов: [tests/AGENTS.MD](../tests/AGENTS.MD).
+Нужны SDK из global.json, Docker, Node и pnpm из package.json.
+Тесты используют WebApplicationFactory, WireMock и реальные Redis/PostgreSQL через Testcontainers.
+Production credentials не нужны.
 
-Внутренние классы пакета не раскрываются тестам и не тестируются напрямую.
-Для HTTP нет mocked HttpMessageHandler.
+## Форматирование C#
 
----
+Единственный форматтер — CSharpier 1.3.0, закреплённый в `.config/dotnet-tools.json`.
+Общие настройки находятся в `.editorconfig`; 100 символов — ориентир переноса строки.
+Выполняйте команды из корня репозитория; нужны GNU Make, Bash, Git и `xargs`
+(macOS/Linux или Git Bash с установленным GNU Make):
 
-## Запуск
+```sh
+make tools-restore
+make format
+make format-check
+```
 
-Нужны SDK из global.json, Docker с Redis 8/PostgreSQL 17 images и доступ к loopback sockets.
-Контейнеры и TLS certificate общие для коллекции; namespace/client ID уникальны для состояния теста.
+`make` выводит справку. Цели `format` и `format-check` используют восстановленный
+локальный инструмент; CI вызывает те же цели Makefile.
+Локальная команда и отдельная проверка CI охватывают только C# текущего решения:
+исходники, тесты и sample, включая новые файлы до `git add`.
+XML, конфиги и React не передаются форматтеру. CSharpier учитывает `.gitignore`
+и сам пропускает стандартный сгенерированный код; дополнительные исключения не требуются.
+Проверка `check` не меняет файлы и возвращает ненулевой код при нарушениях.
+Не запускайте `dotnet format whitespace` или полный `dotnet format` поверх CSharpier.
+Существующая точечная проверка IDE0005 в CI отвечает за неиспользуемые `using`.
 
-Production credentials и реальные пользовательские аккаунты не нужны.
+В Rider установите официальный плагин CSharpier и используйте `Reformat with CSharpier`
+для выбранных `.cs`/`.csx`, чтобы сохранить область внедрения.
+В `Tools | Actions on Save` отключите встроенный `Reformat and Cleanup Code` для C#,
+а также конкурирующие `Reformat code`/`Optimize imports`, если они включены.
+Плагин [выбирает версию из локального tool manifest](https://github.com/belav/csharpier/blob/main/Src/CSharpier.Rider/README.md#csharpier-version);
+если манифеста нет, он ищет глобальную установку. Версия самого плагина независима
+от закреплённой версии форматтера.
+
+## .NET
 
 ```sh
 dotnet restore MonixOne.OidcProxy.Yarp.sln
 dotnet test --project tests/MonixOne.OidcProxy.Yarp.Tests/MonixOne.OidcProxy.Yarp.Tests.csproj -c Release -p:GeneratePackageOnBuild=false
 ```
 
-Повтор значимых гонок и совместимости:
+Для изменений маршрутов или HTTP pipeline сначала выполните целевые тесты:
 
 ```sh
-dotnet test --project tests/MonixOne.OidcProxy.Yarp.Tests/MonixOne.OidcProxy.Yarp.Tests.csproj -c Release --no-build -- --filter-class 'MonixOne.OidcProxy.Yarp.Tests.Refresh*' --filter-class MonixOne.OidcProxy.Yarp.Tests.MultiHostTests --filter-class MonixOne.OidcProxy.Yarp.Tests.RedisMutationTests --filter-class MonixOne.OidcProxy.Yarp.Tests.SessionLifetimeTests --minimum-expected-tests 62
+dotnet test --project tests/MonixOne.OidcProxy.Yarp.Tests/MonixOne.OidcProxy.Yarp.Tests.csproj -c Release -p:GeneratePackageOnBuild=false -- --filter-class MonixOne.OidcProxy.Yarp.Tests.GatewayCompositionTests --filter-class MonixOne.OidcProxy.Yarp.Tests.TlsTerminationTests --filter-class MonixOne.OidcProxy.Yarp.Tests.MultiHostTests
 ```
 
-Concurrency barriers используют TaskCompletionSource и удержание настоящего HTTP-ответа после выпуска rotating refresh token.
-Session/protocol expiry двигаются согласованным TimeProvider.
-Тесты не используют sleep для ожидания гонки.
-В нагрузочной проверке интервал 500 мс измеряет число команд; overlap задаётся barriers.
+| Область | Что проверяется |
+| --- | --- |
+| OIDC и SPA | Code/PKCE, проверка ID token, CSRF/Origin, cookie flags, server-only tokens |
+| Маршруты | Bff-привязки, изоляция клиентов, native YARP policies, HTTP backend и доверенные forwarded headers |
+| Сессии | JWE, срок жизни, общий key ring, повреждённые записи и изоляция Redis scope |
+| Refresh/logout | Конкурентные запросы и реплики, cancellation, неизвестный результат Redis/IdP, отсутствие повторного redemption |
+| Прикладные cookies | Namespace/Path, SameSite/expiry, удаление cookie, отклонение неправильных заголовков |
+| Интеграция | Настоящий OpenIddict/PostgreSQL и документированный профиль BR.Admin-Identity |
 
-Таймауты ограничивают зависшие проверки, а не заменяют синхронизацию.
+Конкурентные сценарии синхронизируются barriers, а не sleeps.
+Изменения безопасности и общего pipeline завершаются полным прогоном проекта.
 
----
-
-## Проверяемые поведения
-
-### Вход и граница SPA
-
-`SpaBoundaryTests`:
-
-- Code/PKCE, cookie flags и server-only tokens.
-- Anonymous 401, CSRF/Origin rejection, очистка browser credentials.
-- ID token issuer/audience/nonce/lifetime/signature.
-- Отзыв уже выданного refresh token при отклонённом входе.
-- Новая session reference при повторном входе.
-
-### Refresh и logout
-
-`RefreshLogoutTests`:
-
-- Две реплики, два multiplexers, 50 запросов и один refresh.
-- Logout во время и после refresh.
-- Native antiforgery form без ожидания refresh.
-- Invalid grant, 429, 5xx и malformed response без retry.
-- Caller cancellation после redemption и остановка владельца до ответа IdP.
-
-`RefreshLoadTests`:
-
-- 100 authenticated waiters за управляемым cookie-validation barrier.
-- Один redemption и отмена одного ожидающего без отмены остальных.
-- GET-команды измеряются через INFO commandstats отдельным test-only соединением.
-- Учитываются GET внутри CAS Lua, включая проверку переиспользованного snapshot.
-- После выпуска ответа проверяются все HTTP outcomes.
-
-Чтобы вывести измерение через standalone MTP runner после сборки:
-
-```sh
-dotnet tests/MonixOne.OidcProxy.Yarp.Tests/bin/Release/net10.0/MonixOne.OidcProxy.Yarp.Tests.dll \
-  --filter-class MonixOne.OidcProxy.Yarp.Tests.RefreshLoadTests \
-  --output Detailed --show-live-output on --show-stdout All --no-ansi --progress off
-```
-
-`RefreshProtocolTests`:
-
-- Некорректный ID token, смена subject и проверка исходного auth_time.
-- Обновлённые role claims в текущем HTTP authorization решении; штатный 403 при отказе policy.
-- Optional ID/refresh tokens и expired pending marker.
-- JWKS rollover и signed-and-encrypted ID tokens.
-
-### Маршруты и несколько SPA
-
-`SpaRoutingTests` и `SpaHostingTests`:
-
-- Любые API пути, методы, query и body.
-- Deep links, dotted paths и разные PathBase.
-- Callback URI и local returnUrl с query/hash.
-- Open redirect и повтор returnUrl отклоняются до logout.
-
-`MultiHostTests`:
-
-- Два origins/client_id на одном BFF.
-- Общий OpenIddict и разные providers.
-- Изоляция cookie/state, refresh contention и logout.
-- Отклонение неверного host/metadata при запуске.
-- Anonymous assets и независимые YARP routes.
-
-`GatewayCompositionTests`:
-
-- Нативный HTTP upstream без BFF metadata.
-- Запрет HTTP и отключённой проверки сертификата для BFF cluster.
-
-### Redis, lifetime и прикладные cookies
-
-`EncryptionKeyTests`:
-
-- Прямую расшифровку JSON сессии из Redis через стандартный jose-jwt, без Data Protection API.
-- Обязательный секрет, PBES2-HS256+A128KW и A256GCM.
-- Зашифрованный framework key ring в Redis и работу после рестарта без общего каталога.
-- Отклонение повреждённого JWE, другого ключа, неверного JSON и отсутствующей привязки к Redis key.
-- Отклонение переноса JWE в другую сессию, клиент или namespace без повреждения исходной сессии.
-- Отказ запуска при открытых legacy framework keys.
-
-Контракт хранения описан в [SESSIONS.md](SESSIONS.md).
-`PreparedConfigurationTests` проверяют также неизменность ключа после reload конфигурации.
-
-`RedisMutationTests`:
-
-- RESP gate задерживает ответ после исполнения команды настоящим Redis.
-- Отключение после claim, потеря его подтверждения и проверка operation ID.
-- Запрет redemption, если запись удалена до проверки владения.
-- Неопределённый SET, cleanup отменённого callback и ограничение orphan TTL.
-- Остановка хоста во время SET с отзывом известных credentials.
-- GETDEL timeout → 503; повторного DEL после подтверждения нет.
-
-`SessionLifetimeTests`:
-
-- Точное idle продление до половины интервала и без refresh token.
-- Активность при refresh через прежнюю границу idle.
-- Absolute timeout и snapshot, истёкший после cookie validation.
-- Access tokens на 10, 30 и 120 секунд.
-- Вычисление порога для JWE-сессии без optional поля RefreshAt.
-
-`SessionBoundaryTests`:
-
-- Redis failure → 503 без proxy.
-- Удаление corrupt records и namespace isolation.
-- Idle/absolute expiry, callback replay и CSRF logout rejection.
-
-`ApplicationCookieTests`:
-
-- Изолированные namespaces и динамические cookie names.
-- Привязка cluster/path и восстановление backend names.
-- Очистка cookies, SameSite, lifetime и Partitioned.
-- Malformed/duplicate rejection и защита BFF correlation cookie.
-
-### Конфигурация и OpenIddict
-
-`PreparedConfigurationTests` запускает фактический sample Program с документированным JSON.
-Проверяются регистрация клиента, Calendar callback cookie и Bearer forwarding.
-Дополнительно проверяется startup snapshot после изменения source и пересоздания native options.
-
-`OpenIddictFlowTests` использует настоящий OpenIddict, PostgreSQL и HTTPS resource API:
-
-- Authorization/PKCE, token, refresh, revocation и RP logout.
-- Encrypted access tokens с официальной validation.
-- API scopes/roles и confidential-client boundary.
-- Вход при отсутствии provider session.
-
-OpenIddict storage использует официальный EF Core model и настоящий PostgreSQL.
-Пакет не имеет собственной SQL-схемы, поэтому тестовая БД создаётся EnsureCreated.
-
-Login fixture устанавливает test-only provider session, далее проходит настоящий OIDC flow; это не проверка пользовательского login/consent UI конкретной Identity-системы.
-
----
-
-## React и интерактивная документация
+## React и генератор документации
 
 ```sh
 cd samples/MonixOne.OidcProxy.Yarp.SampleHost/ClientApp
 corepack pnpm install --frozen-lockfile
 corepack pnpm test
 corepack pnpm build
-corepack pnpm audit
 ```
 
-Vitest/Testing Library проверяют:
+Проверяются генерация и валидация конфигурации, callbacks/PathBase, несколько SPA,
+раздельные Bff/YARP settings и клиентский session/logout flow.
+После изменения разметки откройте `/docs` и проверьте навигацию, код и мобильную ширину.
 
-- HTTP-контракт и session/error UI.
-- Очистку кэша при 401 и остановку запросов после logout.
-- Polling/focus/background policy.
-- Генерацию конфигурации и отказ для небезопасных URL.
-- Callback URI и интерактивные шаги login/refresh/logout/cookies.
-  Secret fields, storage или сетевых запросов у документации нет.
-
-Для визуальной проверки: `pnpm docs:dev` → `http://localhost:4173/docs`.
-Для проверки реального browser cookie/redirect flow нужен настроенный HTTPS BFF/provider/API, как описано в sample README.
-
-Unit/integration tests не заменяют это окружение и инфраструктурные проверки backup/failover, TLS, secret provider, CSP и observability.
-
----
-
-## Package и supply chain
+## NuGet
 
 ```sh
-dotnet format whitespace MonixOne.OidcProxy.Yarp.sln --verify-no-changes
-dotnet format style MonixOne.OidcProxy.Yarp.sln --diagnostics IDE0005 --verify-no-changes
-dotnet list MonixOne.OidcProxy.Yarp.sln package --vulnerable --include-transitive
-dotnet pack src/MonixOne.OidcProxy.Yarp/MonixOne.OidcProxy.Yarp.csproj -c Release --no-build -o artifacts/nuget
+dotnet pack src/MonixOne.OidcProxy.Yarp/MonixOne.OidcProxy.Yarp.csproj -c Release -o artifacts/nuget
 ```
 
-Проверьте .nupkg и .snupkg: один package ID MonixOne.OidcProxy.Yarp, net10.0, LGPL-3.0-only, README, PNG icon, source repository metadata, XML API docs, отсутствие test/provider connector dependencies.
-Audit отражает известные advisory feeds на момент запуска и не доказывает отсутствие неизвестных CVE.
+Проверьте nupkg/snupkg: package ID, net10.0, LGPL-3.0-only, README, icon, XML API docs
+и отсутствие тестовых dependencies. Публикация — отдельная операция.
 
-Статус upstream #373 описан в корневом README.
-
----
-
-## Чистый архив исходников
-
-Используйте committed Git tree, а не архивирование всей рабочей папки.
-Команда исключает также случайно tracked build outputs и старые NuGet packages.
-Нужные PNG схем и package icon сохраняются.
-Незакоммиченные staged/working изменения в этот архив не входят.
-
-```sh
-mkdir -p artifacts
-git archive --format=zip --output=artifacts/source.zip HEAD -- . \
-  ':(exclude,glob)**/bin/**' ':(exclude,glob)**/obj/**' \
-  ':(exclude,glob)**/node_modules/**' ':(exclude,glob)**/dist/**' \
-  ':(exclude,glob)**/wwwroot/**' ':(exclude,glob)**/ClientApp/public/docs-assets/**' \
-  ':(exclude,glob)**/coverage/**' ':(exclude,glob)**/TestResults/**' \
-  ':(exclude,glob)artifacts/**' ':(exclude,glob)**/.vite/**' \
-  ':(exclude,glob)**/.vitest-cache/**' ':(exclude,glob)**/*.tsbuildinfo' \
-  ':(exclude,glob)**/*.nupkg' ':(exclude,glob)**/*.snupkg'
-```
+Автотесты не подтверждают конкретное развёртывание. Перед переключением трафика проверьте
+реальный browser login/logout, backend Bearer validation и работу через балансировщик.

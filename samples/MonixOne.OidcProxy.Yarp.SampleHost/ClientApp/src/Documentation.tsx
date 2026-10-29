@@ -155,9 +155,9 @@ export default function Documentation() {
               {step === 0 && (
                 <>
                   <p>
-                    Один BFF/YARP-хост обслуживает несколько SPA на разных HTTPS
-                    origins. Для каждой SPA задаются свой client name, OIDC
-                    client_id, callback URI, cookie-схема и Redis sessions.{" "}
+                    Браузер обращается по HTTPS к балансировщику, далее YARP/BFF
+                    и приложения работают по HTTP. Каждая SPA использует свой
+                    публичный origin и OIDC client.
                   </p>
                   <p>
                     Resource API и OpenID Provider — отдельные серверы. Пакет
@@ -255,11 +255,6 @@ export default function Documentation() {
                     доступность Redis, регистрация клиента и права на API
                     проверяются при запуске и ручном проходе сценария.
                   </p>
-                  <img
-                    className="doc-diagram"
-                    src={`${routes.docsAssets}/BFF-flow.png`}
-                    alt="SPA обращается к BFF через cookie и CSRF header; BFF использует Redis, OpenID Provider и YARP для доступа к API."
-                  />
                 </>
               )}
               {step === 1 && (
@@ -302,142 +297,48 @@ export default function Documentation() {
                       </section>
                     ))}
                   <p>
-                    Зарегистрируйте каждого клиента отдельно, даже если
-                    используется один OpenID Provider. Выдайте клиенту нужные
-                    scopes. <code>openid</code> включает OIDC,{" "}
-                    <code>profile</code> — профиль, <code>offline_access</code>{" "}
-                    — право запрашивать refresh token. API scopes и
-                    resource/audience определяет ваш провайдер.
+                    Зарегистрируйте confidential client с Authorization Code +
+                    PKCE, refresh grant и нужными API scopes. Провайдер должен
+                    иметь browser login UI и продолжать исходный authorization
+                    request после входа.
                   </p>
-                  <details open>
-                    <summary>OpenIddict: что должно быть настроено</summary>
-                    <ul>
-                      <li>
-                        Стандартные discovery/JWKS, authorization, token,
-                        end-session и revocation endpoints по HTTPS.
-                      </li>
-                      <li>
-                        У client application — secret, точные RedirectUris и
-                        PostLogoutRedirectUris; permissions для authorization,
-                        token, end-session, revocation, code и refresh grants,
-                        response type code и требуемых scopes.
-                      </li>
-                      <li>
-                        На стороне сервера —{" "}
-                        <code>AllowAuthorizationCodeFlow()</code>,{" "}
-                        <code>AllowRefreshTokenFlow()</code> и PKCE. Для
-                        production используйте постоянные signing/encryption
-                        credentials.
-                      </li>
-                      <li>
-                        Приложение провайдера отвечает за login/consent UI,
-                        refresh principal и разрешённые resources/scopes. Пакет
-                        не заменяет реализацию authorization server.
-                      </li>
-                      <li>
-                        Encrypted access tokens OpenIddict поддерживаются: BFF
-                        передаёт их как opaque credentials. Resource API должен
-                        настроить официальную OpenIddict validation/decryption
-                        либо допустимую introspection-модель.
-                      </li>
-                      <li>
-                        Claims в ID token управляют профилем SPA; access token и
-                        API validation определяют полномочия на ресурсы.
-                      </li>
-                    </ul>
-                    <a href="https://documentation.openiddict.com/guides/">
-                      Официальные руководства OpenIddict ↗
-                    </a>
-                  </details>
                   <p>
-                    Провайдер должен возвращать signed ID token и access token
-                    типа Bearer с положительным expires_in. Для завершения
-                    SSO-сессии необходим RP-initiated logout. Если revocation
-                    endpoint отсутствует, локальный logout работает, отзыв
-                    refresh token недоступен.
+                    Authority и callback URI используют публичный HTTPS. Для
+                    OpenIddict нужны permissions используемых endpoints, grants,
+                    response type code и API scopes.
                   </p>
+                  <a href="https://documentation.openiddict.com/guides/">
+                    Настройка OpenIddict ↗
+                  </a>
                 </>
               )}
               {step === 2 && (
                 <>
                   <p>
-                    Зарегистрируйте один host-owned{" "}
-                    <code>ConnectionMultiplexer</code>. Все реплики одного BFF
-                    используют одинаковый Redis и одинаковые
-                    application/environment/namespace. Независимым проектам и
-                    окружениям задайте разные значения.
-                  </p>
-                  <Code
-                    label="Префикс Redis"
-                    value={`${setup.application.toLowerCase()}:${setup.environment.toLowerCase()}:${setup.namespace.toLowerCase()}:${setup.name}:sessions:`}
-                  />
-                  <h3>Серверные сессии</h3>
-                  <p>
-                    JSON сессии с ticket и OAuth-токенами шифруется напрямую
-                    через jose-jwt: PBES2-HS256+A128KW и A256GCM, ключ из
-                    Bff:EncryptionKey. В Redis хранится JWE. Data Protection для
-                    данных сессии не используется. Поддерживаются Redis 6.2+
-                    команды GETDEL и Lua CAS. Memory fallback отсутствует:
-                    потеря Redis приводит к отказу авторизации.
+                    Нужен Redis 6.2+. Пакет создаёт подключение и хранит сессии
+                    и общий key ring в Redis. На всех репликах должны совпадать
+                    Redis, область ключей и EncryptionKey.
                   </p>
                   <Code
                     label="Настройки через secret provider / environment"
-                    value={`ASPNETCORE_ENVIRONMENT=${setup.environment}\nConnectionStrings__Redis=<set through your secret provider>\nBff__EncryptionKey=<strong random PBES2 password from secret provider>\n${[setup, ...others].map((client) => `Bff__Clients__${client.name}__OpenIdConnect__ClientSecret=<set through your secret provider>`).join("\n")}`}
+                    value={`ASPNETCORE_ENVIRONMENT=${setup.environment}\nConnectionStrings__Redis=<Redis connection>\nBff__EncryptionKey=<постоянный случайный секрет>\n${[setup, ...others].map((client) => `Bff__Clients__${client.name}__OpenIdConnect__ClientSecret=<OIDC client secret>`).join("\n")}`}
                   />
-                  <p className="doc-note">
-                    Не помещайте секреты в VITE_* или bundle SPA. Redis требует
-                    TLS, аутентификацию, ACL, контролируемую сеть и выбранную
-                    политику persistence/backup. Для server-session keys не
-                    применяйте произвольное eviction: потерянная запись завершит
-                    сессию.
+                  <p>
+                    Сгенерируйте EncryptionKey один раз через
+                    <code> openssl rand -base64 32</code> и сохраняйте между
+                    redeploy. Секреты остаются в серверной конфигурации.
                   </p>
-                  <details>
-                    <summary>Framework cookies, реплики и восстановление Redis</summary>
-                    <p>
-                      Обязательный <code>Bff:EncryptionKey</code> шифрует сами
-                      данные сессии. Сгенерируйте сильный случайный секрет один раз через{" "}
-                      <code>openssl rand -base64 32</code> и сохраните в secret
-                      provider отдельно от Redis.
-                    </p>
-                    <p>
-                      Стандартные cookies, OIDC state и antiforgery используют
-                      Data Protection. Его общий key ring также хранится в Redis,
-                      зашифрованный тем же конфигурационным секретом через jose-jwt.
-                      Общий каталог не нужен.
-                    </p>
-                    <p>
-                      Все реплики используют одинаковый секрет между рестартами.
-                      Пустой секрет или открытый legacy framework key ring
-                      блокируют запуск. Повреждённая JWE-сессия отклоняется с 401.
-                      Для перехода со старого формата или замены секрета остановите
-                      реплики, смените KeyNamespace и удалите старую область Redis;
-                      пользователям потребуется повторный вход.
-                    </p>
-                    <p>
-                      При восстановлении backup учитывайте, что он может вернуть
-                      удалённые сессии и старые refresh credentials. План
-                      восстановления должен сбрасывать сессии и отзывать grants
-                      или менять область ключей; пакет сам не может обеспечить
-                      монотонность внешнего backup.
-                    </p>
-                  </details>
+                  <a href="https://github.com/Shulyakovskiy/MonixOne.OidcProxy.Yarp/blob/main/docs/SESSIONS.md">
+                    Шифрование, смена ключа и ошибки Redis ↗
+                  </a>
                 </>
               )}
               {step === 3 && (
                 <>
-                  <Code
-                    label="Установка"
-                    value="dotnet pack src/MonixOne.OidcProxy.Yarp/MonixOne.OidcProxy.Yarp.csproj -c Release -o artifacts/nuget"
-                  />
                   <p>
-                    Подключите ProjectReference или локальный nupkg из
-                    artifacts/nuget. Зарегистрируйте YARP и
-                    ConnectionMultiplexer перед AddOidcProxy.
-                  </p>
-                  <p>
-                    Передайте секцию Bff одним вызовом. Пакет сам обходит
-                    Clients и регистрирует схемы. Environment берётся у хоста.
-                    OIDC настраивается стандартным OpenIdConnectOptions.
+                    Подключите пакет и передайте корневую конфигурацию одним
+                    вызовом. YARP, Redis, forwarded headers и все BFF clients
+                    собираются внутри пакета.
                   </p>
                   {valid ? (
                     <Code
@@ -451,49 +352,29 @@ export default function Documentation() {
                   )}
                   <Code label="Program.cs" value={hostCode} />
                   <p>
-                    Пример передаёт <code>/api/…</code> без преобразования.
-                    Match.Path поддерживает любые пути. Transforms изменяют путь
-                    перед отправкой.
-                  </p>
-                  <h3>Пути и SPA bundles</h3>
-                  <p>
-                    Локальный fallback <code>{"{**path}"}</code> обслуживает
-                    остальные GET/HEAD пути, включая сегменты с точками. Для SPA
-                    под путём задайте клиенту PathBase и тот же Vite base.
-                    Сохраните префикс на ingress.
+                    Замените KnownProxies на IP непосредственного
+                    балансировщика. Он сохраняет публичный Host и префикс
+                    приложения, передаёт X-Forwarded-Proto=https и
+                    перезаписывает forwarded headers. YARP и backend работают по
+                    HTTP в доверенной внутренней сети.
                   </p>
                   <p>
-                    Разным bundles нужны отдельные anonymous YARP routes с
-                    привязкой к host. Sample показывает один локальный bundle.
-                  </p>
-                  <hr />
-                  <h3>Граница клиента</h3>
-                  <p>
-                    Каждый BFF route задаёт Metadata["OidcProxy.Client"] и
-                    точный Match.Hosts. Защищённый route требует сессию этого
-                    клиента и X-CSRF.
+                    В ReverseProxy — штатные маршруты и destinations. В
+                    Bff:Clients:Routes — привязки по RouteId, AllowAnonymous для
+                    SPA assets и необязательная CookiePolicy. Пакет сам
+                    подключает middleware и MapReverseProxy.
                   </p>
                   <p>
-                    AuthorizationPolicy="anonymous" подходит для public assets.
-                    OAuth token на них не передаётся. По умолчанию cookies
-                    удаляются. Технические cookies приложения включаются
-                    отдельной CookiePolicy.
-                  </p>
-                  <p>
-                    Независимые routes других хостов сохраняют нативное
-                    поведение YARP. Route на SPA-хосте без привязки к клиенту
-                    получает 403.
+                    Для размещения под путём согласуйте BFF PathBase, SPA base и
+                    callback URI. Сохраните префикс на балансировщике.
                   </p>
                   <details>
-                    <summary>
-                      Cookies сторонних приложений: пример Calendar
-                    </summary>
+                    <summary>Прикладная cookie для внешнего callback</summary>
                     <p>
-                      Добавьте CookiePolicies у клиента и OidcProxy.CookiePolicy
-                      в metadata конкретных routes. Один cluster получает только
-                      свои технические cookies. Browser names изолированы по
-                      клиенту/политике, backend получает исходное имя; BFF
-                      session и OIDC cookies не передаются.
+                      CookiePolicy нужна только приложениям с техническими
+                      state/correlation cookies. Start защищён сессией и X-CSRF;
+                      точный callback разрешает внешнюю навигацию, а backend
+                      проверяет state.
                     </p>
                     {valid && (
                       <Code
@@ -501,52 +382,15 @@ export default function Documentation() {
                         value={createCookieConfiguration(setup)}
                       />
                     )}
-                    <p>
-                      Замените example Calendar upstream реальным HTTPS
-                      endpoint. Path в политике задаётся без client PathBase:
-                      BFF добавит его сам.{" "}
-                    </p>
-                    <p>
-                      Start требует сессию/X-CSRF. Только точный GET callback
-                      имеет anonymous. Внешний state/nonce обязан проверить
-                      backend. Более строгий SameSite и меньший срок
-                      сохраняются; session cookie не становится persistent.
-                    </p>
                     <a href="https://github.com/Shulyakovskiy/MonixOne.OidcProxy.Yarp/blob/main/docs/COOKIES.md">
-                      Полный контракт cookie policies ↗
+                      Контракт прикладных cookies ↗
                     </a>
                   </details>
                   <p>
                     <a href="https://github.com/Shulyakovskiy/MonixOne.OidcProxy.Yarp/blob/main/docs/BR-ADMIN-IDENTITY.md">
-                      BR.Admin-Identity: IdP, BFF, ingress и Calendar по шагам ↗
+                      Готовый профиль BR.Admin-Identity ↗
                     </a>
                   </p>
-                  <details>
-                    <summary>TLS termination и ingress</summary>
-                    <p>
-                      PublicOrigin — внешний адрес браузера. Ingress должен
-                      сохранить Host. При повторном TLS до Kestrel хост получает
-                      HTTPS напрямую.
-                    </p>
-                    <p>
-                      Для HTTP hop нужен ForwardedHeaders middleware до HTTPS
-                      redirection/BFF. Укажите KnownProxies/KnownIPNetworks и
-                      AllowedHosts. Произвольным входящим X-Forwarded-* доверять
-                      нельзя. Проверка TLS downstream обязательна.
-                    </p>
-                    <p>
-                      Убедитесь, что SPA, callback URI и API-запросы видны
-                      браузеру на одном origin. Для Vite development используйте
-                      HTTPS dev proxy; PublicOrigin должен совпадать с адресом
-                      Vite.
-                    </p>
-                    <p>
-                      Ограничьте Hosting.Diagnostics и HttpForwarder уровнем
-                      Warning. Их Information logs могут содержать query с
-                      code/state. Исключите credentials из APM и
-                      request/response logging.
-                    </p>
-                  </details>
                 </>
               )}
               {step === 4 && (
@@ -587,12 +431,6 @@ export default function Documentation() {
                     503 показывайте недоступность, без автоматического повтора
                     POST/refresh или перенаправления в бесконечный login.
                   </p>
-                  <p className="doc-note">
-                    HttpOnly скрывает cookie от JavaScript, но XSS всё ещё может
-                    выполнять запросы от имени пользователя. Хост SPA отвечает
-                    за CSP, безопасный DOM, зависимости, входные данные и
-                    отсутствие секретов в bundle/logs.
-                  </p>
                 </>
               )}
               {step === 5 && (
@@ -604,16 +442,11 @@ export default function Documentation() {
                   </p>
                   <div className="doc-checklist">
                     {[
-                      "Discovery/JWKS доступны BFF по HTTPS; провайдер принимает confidential client и callback URI.",
-                      "Login возвращает на /; cookie имеет Secure, HttpOnly, SameSite=Strict, Path=/ и не содержит OAuth tokens.",
-                      "GET /.auth/me с X-CSRF: 1 возвращает claims; без сессии — 401, без header — 403.",
-                      "API принимает server access token и проверяет audience, scope/roles; входящий browser Bearer не проходит как BFF session.",
-                      "По истечении access token параллельные запросы через две реплики вызывают один refresh.",
-                      "Logout во время refresh удаляет запись; поздний refresh не возвращает авторизованную сессию.",
-                      "После logout старые cookie дают 401; UI очищает данные пользователя.",
-                      "Два SPA-хоста используют разные client_id/cookies; перенесённые cookie/state не авторизуют другого клиента. Logout и refresh локально изолированы; проверьте также глобальную SSO-политику IdP.",
-                      "При недоступности Redis BFF возвращает 503; токены, cookies, codes и client secret не попадают в логи.",
-                      "Ingress доверяет только настроенным proxies; Bff:EncryptionKey хранится отдельно от Redis и одинаков на репликах.",
+                      "Login с пустыми cookies проходит browser login провайдера и возвращает в SPA.",
+                      "Session/API с cookie и X-CSRF работают; API проверяет audience, scopes и роли.",
+                      "Без сессии — 401, при нарушении CSRF/авторизации — 403, при недоступности Redis — 503.",
+                      "Native logout завершает локальную сессию; следующий запрос требует нового входа.",
+                      "Балансировщик передаёт правильные scheme/host; у реплик общие Redis и EncryptionKey.",
                     ].map((item) => (
                       <label key={item}>
                         <input type="checkbox" />
@@ -621,16 +454,9 @@ export default function Documentation() {
                       </label>
                     ))}
                   </div>
-                  <Code
-                    label="Проверки репозитория — нужны .NET 10, Docker, Node 24+, pnpm"
-                    value={`dotnet test --project tests/MonixOne.OidcProxy.Yarp.Tests/MonixOne.OidcProxy.Yarp.Tests.csproj -c Release -p:GeneratePackageOnBuild=false\ncd samples/MonixOne.OidcProxy.Yarp.SampleHost/ClientApp\ncorepack pnpm install --frozen-lockfile\ncorepack pnpm test\ncorepack pnpm build`}
-                  />
-                  <p>
-                    Автотесты проходят реальный HTTP pipeline sample через
-                    WebApplicationFactory, WireMock OIDC и Redis. Отдельные
-                    сценарии используют настоящий OpenIddict с PostgreSQL и
-                    HTTPS API, в том числе encrypted access tokens.
-                  </p>
+                  <a href="https://github.com/Shulyakovskiy/MonixOne.OidcProxy.Yarp/blob/main/docs/TESTING.md">
+                    Автотесты и сборка пакета ↗
+                  </a>
                 </>
               )}
               <div className="doc-pagination">
@@ -711,135 +537,14 @@ export default function Documentation() {
                 </div>
               </div>
             </div>
-            <details>
-              <summary>
-                Полная схема {flow === "login" ? "входа" : "взаимодействия"}
-              </summary>
-              <a
-                href={
-                  flow === "login"
-                    ? `${routes.docsAssets}/BFF-login-workflow.png`
-                    : `${routes.docsAssets}/BFF-flow.png`
-                }
-              >
-                <img
-                  className="doc-diagram"
-                  src={
-                    flow === "login"
-                      ? `${routes.docsAssets}/BFF-login-workflow.png`
-                      : `${routes.docsAssets}/BFF-flow.png`
-                  }
-                  alt="Полная схема SPA BFF; подробное текстовое описание приведено в этапах выше."
-                />
+            <p>
+              <a href="https://github.com/Shulyakovskiy/MonixOne.OidcProxy.Yarp/blob/main/docs/SESSIONS.md">
+                Подробнее о сессиях, конкурентном refresh и ошибках
+                инфраструктуры ↗
               </a>
-            </details>
-            <hr />
-            <h3>Контракт браузера</h3>
-            <p>
-              Пути ниже относятся к текущему Vite base. Client PathBase и Vite
-              base должны совпадать; Callback URI также включают PathBase.
-            </p>
-            <div className="doc-table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Endpoint</th>
-                    <th>Как вызвать</th>
-                    <th>Результат</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td>GET {routes.login}</td>
-                    <td>Top-level navigation</td>
-                    <td>OIDC redirect, затем /</td>
-                  </tr>
-                  <tr>
-                    <td>GET {routes.user}</td>
-                    <td>Cookie + X-CSRF: 1</td>
-                    <td>Claims; 401 без сессии</td>
-                  </tr>
-                  <tr>
-                    <td>/api/…</td>
-                    <td>Cookie + X-CSRF: 1</td>
-                    <td>YARP → настроенный HTTPS API</td>
-                  </tr>
-                  <tr>
-                    <td>GET {routes.antiforgery}</td>
-                    <td>Cookie + X-CSRF: 1</td>
-                    <td>Framework request token для logout form</td>
-                  </tr>
-                  <tr>
-                    <td>POST {routes.logout}</td>
-                    <td>Native form + antiforgery; либо X-CSRF: 1</td>
-                    <td>Удаление сессии, redirect к provider</td>
-                  </tr>
-                  <tr>
-                    <td>GET /.auth/login/callback</td>
-                    <td>Только ответ провайдера со state/code</td>
-                    <td>Обмен code, новая cookie</td>
-                  </tr>
-                  <tr>
-                    <td>GET /.auth/signout-callback</td>
-                    <td>Ответ провайдера при logout</td>
-                    <td>Завершение sign-out → /</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-            <div className="doc-responsibilities">
-              <section>
-                <h3>Браузер / React</h3>
-                <p>
-                  UI, query cache, явный login, same-origin fetch, обработка
-                  401/403/503. Токенами не управляет.
-                </p>
-              </section>
-              <section>
-                <h3>BFF / Redis / YARP</h3>
-                <p>
-                  OIDC client, server ticket, CSRF boundary, сериализация
-                  refresh, локальный logout, фиксированные API destinations.
-                </p>
-              </section>
-              <section>
-                <h3>Provider / Resource API</h3>
-                <p>
-                  Учётные данные пользователя, grants и token issuance; в API —
-                  token validation и авторизация по ресурсам.
-                </p>
-              </section>
-            </div>
-            <hr />
-            <h3>Границы гарантий</h3>
-            <p>
-              Logout запрещает новые запросы с удалённой локальной сессией. Он
-              не отзывает уже отправленный HTTP-запрос и не делает Redis и
-              провайдера общей транзакцией. Recovery из старого Redis backup,
-              компрометация ключей и XSS требуют мер на стороне хоста и
-              инфраструктуры.
             </p>
           </article>
         )}
-        <aside className="doc-sources">
-          <h2>Стандарты и первичные источники</h2>
-          <a href="https://datatracker.ietf.org/doc/html/rfc10017">
-            OAuth 2.0 for Browser-Based Applications
-          </a>
-          <a href="https://www.rfc-editor.org/rfc/rfc9700.html">
-            OAuth Security BCP
-          </a>
-          <a href="https://openid.net/specs/openid-connect-rpinitiated-1_0.html">
-            OIDC RP-Initiated Logout
-          </a>
-          <a href="https://documentation.openiddict.com/">OpenIddict</a>
-          <a href="https://learn.microsoft.com/aspnet/core/fundamentals/servers/yarp/getting-started?view=aspnetcore-10.0">
-            YARP
-          </a>
-          <a href="https://tanstack.com/query/latest/docs/framework/react/guides/window-focus-refetching">
-            TanStack Query
-          </a>
-        </aside>
       </main>
       <footer className="doc-footer">
         <span>MonixOne.OidcProxy.Yarp · LGPL-3.0-only</span>

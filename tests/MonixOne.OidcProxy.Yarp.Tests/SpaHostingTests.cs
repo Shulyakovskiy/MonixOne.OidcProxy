@@ -21,7 +21,9 @@ public sealed class SpaHostingTests(InfrastructureFixture infrastructure)
 
         // Assert
         start.StatusCode.ShouldBe(HttpStatusCode.Redirect);
-        QueryHelpers.ParseQuery(start.Headers.Location!.Query)["redirect_uri"].ToString()
+        QueryHelpers
+            .ParseQuery(start.Headers.Location!.Query)["redirect_uri"]
+            .ToString()
             .ShouldBe("https://spa.example/Portal/.auth/login/callback");
     }
 
@@ -29,7 +31,9 @@ public sealed class SpaHostingTests(InfrastructureFixture infrastructure)
     [InlineData("/admin")]
     [InlineData("/workspace/portal")]
     [InlineData("/client%20area")]
-    public async Task LoginApiAndLogout_HostUsesPathBase_KeepCallbacksAndNavigationInsideTheSpa(string pathBase)
+    public async Task LoginApiAndLogout_HostUsesPathBase_KeepCallbacksAndNavigationInsideTheSpa(
+        string pathBase
+    )
     {
         // Arrange
         var ct = TestContext.Current.CancellationToken;
@@ -49,8 +53,15 @@ public sealed class SpaHostingTests(InfrastructureFixture infrastructure)
         login.Headers.Location!.OriginalString.ShouldBe(pathBase + "/");
         api.StatusCode.ShouldBe(HttpStatusCode.OK);
         logout.StatusCode.ShouldBe(HttpStatusCode.Redirect);
-        QueryHelpers.ParseQuery(logout.Headers.Location!.Query)["post_logout_redirect_uri"].ToString()
-            .ShouldBe(new Uri(BffApplicationFactory.Origin, pathBase + OidcProxyRoutes.LogoutCallback).AbsoluteUri);
+        QueryHelpers
+            .ParseQuery(logout.Headers.Location!.Query)["post_logout_redirect_uri"]
+            .ToString()
+            .ShouldBe(
+                new Uri(
+                    BffApplicationFactory.Origin,
+                    pathBase + OidcProxyRoutes.LogoutCallback
+                ).AbsoluteUri
+            );
         identity.ActiveRefreshTokens.ShouldBe(0);
     }
 }
