@@ -1,10 +1,72 @@
 using System.Net;
+using System.Net.Http.Json;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MonixOne.OidcProxy.Yarp.Tests;
 
 [Collection("Infrastructure")]
 public sealed class RefreshProtocolTests(InfrastructureFixture infrastructure)
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Refresh_AuthenticationTimePresent_PreservesOriginalAuthentication(bool changeAuthTime)
+    {
+        // Arrange
+        var ct = TestContext.Current.CancellationToken;
+        using var identity = new OidcWireMock(infrastructure)
+        { AuthenticationTime = DateTimeOffset.UtcNow.AddMinutes(-1).ToUnixTimeSeconds() };
+        await using var host = identity.CreateBff();
+        using var browser = host.CreateBrowser();
+        using var provider = identity.CreateIdentityBrowser();
+        using var login = await browser.LoginAsync(provider);
+        if (changeAuthTime) identity.AuthenticationTime++;
+        host.Clock.Advance(TimeSpan.FromSeconds(110));
+
+        // Act
+        using var refresh = await browser.ApiAsync(cancellationToken: ct);
+
+        // Assert
+        login.StatusCode.ShouldBe(HttpStatusCode.Redirect);
+        refresh.StatusCode.ShouldBe(changeAuthTime ? HttpStatusCode.Unauthorized : HttpStatusCode.OK);
+        identity.RefreshRequests.ShouldBe(1);
+        identity.ActiveRefreshTokens.ShouldBe(changeAuthTime ? 0 : 1);
+    }
+
+    [Fact]
+    public async Task Refresh_NewRoleClaims_AuthorizesTheSameRequestUsingRefreshedIdentity()
+    {
+        // Arrange
+        var ct = TestContext.Current.CancellationToken;
+        using var identity = new OidcWireMock(infrastructure) { Role = "reader" };
+        await using var host = identity.CreateBff();
+        host.ConfigureRoutes = routes => routes[0] = routes[0] with { AuthorizationPolicy = "Managers" };
+        await using var configured = host.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
+            services.AddAuthorization(options => options.AddPolicy("Managers", policy => policy.RequireRole("manager")))));
+        using var browser = configured.CreateClient(new WebApplicationFactoryClientOptions
+        { BaseAddress = BffApplicationFactory.Origin, AllowAutoRedirect = false });
+        using var provider = identity.CreateIdentityBrowser();
+        using var login = await browser.LoginAsync(provider);
+
+        // Act
+        using var denied = await browser.ApiAsync(cancellationToken: ct);
+        identity.Role = "manager";
+        host.Clock.Advance(TimeSpan.FromSeconds(110));
+        using var allowed = await browser.ApiAsync(cancellationToken: ct);
+        using var me = await browser.ApiAsync(OidcProxyRoutes.User, ct);
+        var claims = await me.Content.ReadFromJsonAsync<Dictionary<string, string[]>>(ct);
+
+        // Assert
+        login.StatusCode.ShouldBe(HttpStatusCode.Redirect);
+        denied.StatusCode.ShouldBe(HttpStatusCode.Forbidden);
+        allowed.StatusCode.ShouldBe(HttpStatusCode.OK);
+        claims!["role"].ShouldContain("manager");
+        identity.RefreshRequests.ShouldBe(1);
+        identity.BackendRequests.Count.ShouldBe(1);
+    }
+
     [Theory]
     [InlineData("issuer")]
     [InlineData("audience")]

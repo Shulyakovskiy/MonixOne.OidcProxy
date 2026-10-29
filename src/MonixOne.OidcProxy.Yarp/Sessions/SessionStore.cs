@@ -96,9 +96,11 @@ internal sealed class SessionStore(BffClient client, ConnectionMultiplexer conne
     internal Task<bool> CompareExchangeAsync(SessionSnapshot expected, StoredSession? updated, CancellationToken cancellationToken)
     {
         var lifetime = updated is null ? TimeSpan.Zero : Lifetime(updated);
+        string? value = null;
+        if (updated is not null && lifetime > TimeSpan.Zero)
+            value = updated == expected.State ? expected.Value : Encode(updated);
         return CompareExchangeRawAsync(client.RedisKeyPrefix + "sessions:" + expected.Id, expected.Value,
-            lifetime > TimeSpan.Zero && updated is not null ? updated == expected.State ? expected.Value : Encode(updated) : null,
-            lifetime, cancellationToken);
+            value, lifetime, cancellationToken);
     }
 
     private async Task<bool> CompareExchangeRawAsync(string key, string expected, string? updated,

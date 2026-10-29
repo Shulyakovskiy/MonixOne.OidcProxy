@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
@@ -42,6 +43,8 @@ internal sealed class OidcWireMock : IDisposable
     internal bool OmitRotatedRefreshToken { get; set; }
     internal bool IssueRefreshToken { get; set; } = true;
     internal int AccessTokenLifetime { get; set; } = 120;
+    internal long? AuthenticationTime { get; set; }
+    internal string? Role { get; set; }
     internal SymmetricSecurityKey EncryptionKey { get; } = new(RandomNumberGenerator.GetBytes(32));
     internal string LastAccessToken = string.Empty;
     internal string LastRefreshToken = string.Empty;
@@ -185,12 +188,20 @@ internal sealed class OidcWireMock : IDisposable
     }
 
     private string CreateIdToken(string nonce)
-        => new JsonWebTokenHandler().CreateToken(new SecurityTokenDescriptor
+    {
+        var claims = new List<Claim>
+        {
+            new("sub", InvalidIdToken == "subject" ? "other-user" : "user-1"),
+            new("nonce", InvalidIdToken == "nonce" ? "wrong-nonce" : nonce)
+        };
+        if (AuthenticationTime is { } authTime)
+            claims.Add(new Claim("auth_time", authTime.ToString(CultureInfo.InvariantCulture), ClaimValueTypes.Integer64));
+        if (Role is not null) claims.Add(new Claim("role", Role));
+        return new JsonWebTokenHandler().CreateToken(new SecurityTokenDescriptor
         {
             Issuer = InvalidIdToken == "issuer" ? "https://wrong.example" : Origin.AbsoluteUri.TrimEnd('/'),
             Audience = InvalidIdToken == "audience" ? "wrong-client" : RegisteredClientId,
-            Subject = new ClaimsIdentity([new Claim("sub", InvalidIdToken == "subject" ? "other-user" : "user-1"),
-                new Claim("nonce", InvalidIdToken == "nonce" ? "wrong-nonce" : nonce)]),
+            Subject = new ClaimsIdentity(claims),
             Expires = InvalidIdToken == "expired" ? DateTime.UtcNow.AddMinutes(-10) : DateTime.UtcNow.AddHours(1),
             IssuedAt = DateTime.UtcNow.AddMinutes(-15),
             NotBefore = DateTime.UtcNow.AddMinutes(-15),
@@ -198,6 +209,7 @@ internal sealed class OidcWireMock : IDisposable
             EncryptingCredentials = EncryptIdentityTokens
                 ? new EncryptingCredentials(EncryptionKey, SecurityAlgorithms.Aes256KW, SecurityAlgorithms.Aes256CbcHmacSha512) : null
         });
+    }
 
     private static ResponseMessage Json(object value, int status = 200)
     {
