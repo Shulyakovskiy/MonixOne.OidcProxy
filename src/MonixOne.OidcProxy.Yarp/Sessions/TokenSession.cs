@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Security.Claims;
 using System.Security.Cryptography;
@@ -18,28 +19,43 @@ internal sealed class TokenSession(SessionStore store, BffClient client,
     IOptionsMonitor<OpenIdConnectOptions> oidcOptions, TimeProvider timeProvider,
     IHostApplicationLifetime applicationLifetime, ILogger<TokenSession> logger)
 {
-    internal async Task<AuthenticationTicket?> GetActiveTicketAsync(string id, CancellationToken cancellationToken)
+    private const int MaxStateAttempts = 4096;
+    private const int MaxRefreshPolls = 256;
+    private const int MaxCompletionAttempts = 16;
+    private static readonly TimeSpan InitialPollDelay = TimeSpan.FromMilliseconds(50);
+    private static readonly TimeSpan MaximumPollDelay = TimeSpan.FromMilliseconds(500);
+    private readonly ConcurrentDictionary<string, Lazy<Task>> _refreshes = new(StringComparer.Ordinal);
+    private readonly CancellationToken _stopping = applicationLifetime.ApplicationStopping;
+
+    internal async Task<AuthenticationTicket?> GetActiveTicketAsync(string id, CancellationToken cancellationToken,
+        SessionSnapshot? initial = null)
     {
         var activityAt = timeProvider.GetUtcNow();
-        var waitStarted = timeProvider.GetTimestamp();
-        for (var attempt = 0; attempt < 4096; attempt++)
+        var snapshot = initial;
+        for (var attempt = 0; attempt < MaxStateAttempts; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var snapshot = await store.ReadAsync(id, cancellationToken);
+            snapshot ??= await store.ReadAsync(id, cancellationToken);
             if (snapshot is null) return null;
             var now = timeProvider.GetUtcNow();
+            var reused = ReferenceEquals(snapshot, initial);
+            if (snapshot.State.AbsoluteExpiresAt <= now || snapshot.State.IdleExpiresAt <= now)
+            {
+                if (await store.CompareExchangeAsync(snapshot, null, cancellationToken)) return null;
+                snapshot = null;
+                continue;
+            }
             if (snapshot.State.RefreshOperation is not null)
             {
                 if (snapshot.State.RefreshDeadline <= now)
                 {
-                    // A worker may have redeemed a rotating refresh token and lost the response.
-                    // Never retry that token after an ambiguous failure or a crashed worker.
+                    // Expiry must still work while a local owner is awaiting IdP.
+                    // An ambiguous rotating credential is never redeemed again.
                     if (await store.CompareExchangeAsync(snapshot, null, cancellationToken)) return null;
-                    continue;
                 }
-                if (timeProvider.GetElapsedTime(waitStarted) >= client.Options.RefreshTimeout)
-                    throw new SessionUnavailableException("Another request is still refreshing this session.");
-                await Task.Delay(TimeSpan.FromMilliseconds(25), timeProvider, cancellationToken);
+                else if (await TouchAsync(snapshot, activityAt, snapshot.State.RefreshAt, reused, cancellationToken))
+                    await WaitForRefreshAsync(snapshot, cancellationToken);
+                snapshot = null;
                 continue;
             }
 
@@ -48,98 +64,174 @@ internal sealed class TokenSession(SessionStore store, BffClient client,
                     DateTimeStyles.RoundtripKind, out var expiresAt))
             {
                 if (await store.CompareExchangeAsync(snapshot, null, cancellationToken)) return null;
+                snapshot = null;
                 continue;
             }
             var refreshToken = ticket.Properties.GetTokenValue("refresh_token");
-            // Old v6 records have no RefreshAt. Derive it once from their remaining
-            // token lifetime and persist it with the same CAS used for activity.
+            // Legacy v6 records derive a stable threshold on their first activity.
             var refreshAt = snapshot.State.RefreshAt ?? StoredSession.CalculateRefreshAt(expiresAt, now);
             if (expiresAt > now && (string.IsNullOrEmpty(refreshToken) || now < refreshAt))
             {
-                var idleUntil = activityAt + client.Options.SessionIdleTimeout;
-                if (idleUntil > snapshot.State.AbsoluteExpiresAt) idleUntil = snapshot.State.AbsoluteExpiresAt;
-                var touched = snapshot.State with
-                {
-                    IdleExpiresAt = idleUntil > snapshot.State.IdleExpiresAt ? idleUntil : snapshot.State.IdleExpiresAt,
-                    RefreshAt = refreshAt
-                };
-                if (touched != snapshot.State && !await store.CompareExchangeAsync(snapshot, touched, cancellationToken)) continue;
-                return ticket;
+                if (await TouchAsync(snapshot, activityAt, refreshAt, reused, cancellationToken)) return ticket;
             }
-
-            if (string.IsNullOrEmpty(refreshToken))
+            else if (string.IsNullOrEmpty(refreshToken))
             {
                 if (await store.CompareExchangeAsync(snapshot, null, cancellationToken)) return null;
-                continue;
             }
-
-            var operation = RandomNumberGenerator.GetHexString(32);
-            var claimed = snapshot.State with
-            {
-                RefreshOperation = operation,
-                RefreshDeadline = now + client.Options.RefreshTimeout
-            };
-            // Redis may commit a claim even if waiting for its reply is cancelled.
-            // Ownership and completion therefore share a server-owned budget from
-            // the moment the mutation is sent, not from receipt of its response.
-            cancellationToken.ThrowIfCancellationRequested();
-            using var ownerTimeout = CancellationTokenSource.CreateLinkedTokenSource(applicationLifetime.ApplicationStopping);
-            ownerTimeout.CancelAfter(client.Options.RefreshTimeout);
-            try
-            {
-                if (!await TryClaimAsync(snapshot, claimed, ownerTimeout.Token)) continue;
-            }
-            catch (OperationCanceledException e) when (ownerTimeout.IsCancellationRequested)
-            {
-                throw new SessionUnavailableException("Refresh ownership could not be confirmed within its server budget.", e);
-            }
-            AuthenticationTicket updated;
-            try
-            {
-                updated = await RefreshAsync(ticket, refreshToken, ownerTimeout.Token);
-            }
-            catch (Exception e)
-            {
-                await InvalidateAsync(id);
-                await RevokeAsync(ticket, CancellationToken.None);
-                logger.LogWarning("BFF refresh failed; session cleanup requested. Failure type: {FailureType}", e.GetType().Name);
-                if (e is ReauthenticationRequiredException) return null;
-                throw new SessionUnavailableException("The identity provider could not complete token refresh.", e);
-            }
-
-            try
-            {
-                for (var completionAttempt = 0; completionAttempt < 16; completionAttempt++)
-                {
-                    var latest = await store.ReadAsync(id, ownerTimeout.Token);
-                    if (latest is null || latest.State.RefreshOperation != operation || latest.State.RefreshDeadline <= timeProvider.GetUtcNow())
-                    {
-                        await RevokeAsync(updated, CancellationToken.None);
-                        return null;
-                    }
-                    var completedAt = timeProvider.GetUtcNow();
-                    var idleUntil = completedAt + client.Options.SessionIdleTimeout;
-                    var completed = latest.State with
-                    {
-                        Ticket = Convert.ToBase64String(TicketSerializer.Default.Serialize(updated)),
-                        IdleExpiresAt = idleUntil < latest.State.AbsoluteExpiresAt ? idleUntil : latest.State.AbsoluteExpiresAt,
-                        RefreshOperation = null,
-                        RefreshDeadline = null,
-                        RefreshAt = StoredSession.CalculateRefreshAt(DateTimeOffset.Parse(updated.Properties.GetTokenValue("expires_at")!,
-                            CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind), completedAt)
-                    };
-                    if (await store.CompareExchangeAsync(latest, completed, ownerTimeout.Token)) return updated;
-                }
-                throw new SessionUnavailableException("Session changed repeatedly while completing refresh.");
-            }
-            catch (Exception e)
-            {
-                await InvalidateAsync(id);
-                await RevokeAsync(updated, CancellationToken.None);
-                throw new SessionUnavailableException("Unable to persist the rotated tokens.", e);
-            }
+            else await WaitForRefreshAsync(snapshot, cancellationToken);
+            snapshot = null;
         }
         throw new SessionUnavailableException("Session contention exceeded the bounded retry limit.");
+    }
+
+    private DateTimeOffset ActivityExpiration(StoredSession state, DateTimeOffset activityAt)
+    {
+        var idleUntil = activityAt + client.Options.SessionIdleTimeout;
+        if (idleUntil > state.AbsoluteExpiresAt) idleUntil = state.AbsoluteExpiresAt;
+        return idleUntil > state.IdleExpiresAt ? idleUntil : state.IdleExpiresAt;
+    }
+
+    private Task<bool> TouchAsync(SessionSnapshot snapshot, DateTimeOffset activityAt, DateTimeOffset? refreshAt,
+        bool verifyCurrent, CancellationToken ct)
+    {
+        var touched = snapshot.State with
+        {
+            // A later concurrent activity already covers this request's instant.
+            IdleExpiresAt = ActivityExpiration(snapshot.State, activityAt),
+            RefreshAt = refreshAt
+        };
+        // An authentication snapshot may predate logout or a concurrent refresh.
+        // Verify it even when another activity already covers the idle instant.
+        return touched == snapshot.State && !verifyCurrent ? Task.FromResult(true) : store.CompareExchangeAsync(snapshot, touched, ct);
+    }
+
+    private async Task WaitForRefreshAsync(SessionSnapshot snapshot, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        // Each TokenSession belongs to one client. Lazy prevents losing factories
+        // from starting extra owners; caller cancellation only stops that waiter.
+        var operation = _refreshes.GetOrAdd(snapshot.Id,
+            _ => new Lazy<Task>(() => CoordinateRefreshAsync(snapshot)));
+        await operation.Value.WaitAsync(ct);
+    }
+
+    private async Task CoordinateRefreshAsync(SessionSnapshot initial)
+    {
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(_stopping);
+        budget.CancelAfter(client.Options.RefreshTimeout);
+        var ct = budget.Token;
+        SessionSnapshot? snapshot = initial;
+        var delay = InitialPollDelay;
+        try
+        {
+            for (var attempt = 0; attempt < MaxRefreshPolls; attempt++)
+            {
+                ct.ThrowIfCancellationRequested();
+                snapshot ??= await store.ReadAsync(initial.Id, ct);
+                if (snapshot is null) return;
+                var now = timeProvider.GetUtcNow();
+                if (snapshot.State.RefreshOperation is not null)
+                {
+                    if (snapshot.State.RefreshDeadline <= now)
+                    {
+                        if (await store.CompareExchangeAsync(snapshot, null, ct)) return;
+                    }
+                    else
+                    {
+                        var milliseconds = Math.Min(MaximumPollDelay.TotalMilliseconds,
+                            delay.TotalMilliseconds * (0.8 + Random.Shared.NextDouble() * 0.4));
+                        await Task.Delay(TimeSpan.FromMilliseconds(milliseconds), timeProvider, ct);
+                        delay = TimeSpan.FromMilliseconds(Math.Min(delay.TotalMilliseconds * 2, MaximumPollDelay.TotalMilliseconds));
+                    }
+                    snapshot = null;
+                    continue;
+                }
+
+                var ticket = snapshot.State.ReadTicket();
+                if (!DateTimeOffset.TryParse(ticket.Properties.GetTokenValue("expires_at"), CultureInfo.InvariantCulture,
+                        DateTimeStyles.RoundtripKind, out var expiresAt))
+                {
+                    if (await store.CompareExchangeAsync(snapshot, null, ct)) return;
+                    snapshot = null;
+                    continue;
+                }
+                var refreshToken = ticket.Properties.GetTokenValue("refresh_token");
+                var refreshAt = snapshot.State.RefreshAt ?? StoredSession.CalculateRefreshAt(expiresAt, now);
+                if (string.IsNullOrEmpty(refreshToken) || now < refreshAt) return;
+                var operation = RandomNumberGenerator.GetHexString(32);
+                var claimed = snapshot.State with
+                {
+                    RefreshOperation = operation,
+                    RefreshDeadline = now + client.Options.RefreshTimeout,
+                    IdleExpiresAt = ActivityExpiration(snapshot.State, now)
+                };
+                // The server budget already applies before sending this mutation.
+                if (!await TryClaimAsync(snapshot, claimed, ct))
+                {
+                    snapshot = null;
+                    continue;
+                }
+
+                AuthenticationTicket updated;
+                try
+                {
+                    updated = await RefreshAsync(ticket, refreshToken, ct);
+                }
+                catch (Exception e)
+                {
+                    await InvalidateAsync(initial.Id);
+                    await RevokeAsync(ticket, CancellationToken.None);
+                    logger.LogWarning("BFF refresh failed; session cleanup requested. Failure type: {FailureType}", e.GetType().Name);
+                    if (e is ReauthenticationRequiredException) return;
+                    throw new SessionUnavailableException("The identity provider could not complete token refresh.", e);
+                }
+                await CompleteRefreshAsync(initial.Id, operation, updated, ct);
+                return;
+            }
+            throw new SessionUnavailableException("Session contention exceeded the bounded refresh limit.");
+        }
+        catch (OperationCanceledException e) when (budget.IsCancellationRequested)
+        {
+            throw new SessionUnavailableException("Refresh could not complete within its server budget.", e);
+        }
+        finally
+        {
+            _refreshes.TryRemove(initial.Id, out _);
+        }
+    }
+
+    private async Task CompleteRefreshAsync(string id, string operation, AuthenticationTicket updated, CancellationToken ct)
+    {
+        try
+        {
+            for (var attempt = 0; attempt < MaxCompletionAttempts; attempt++)
+            {
+                var latest = await store.ReadAsync(id, ct);
+                if (latest is null || latest.State.RefreshOperation != operation || latest.State.RefreshDeadline <= timeProvider.GetUtcNow())
+                {
+                    await RevokeAsync(updated, CancellationToken.None);
+                    return;
+                }
+                var now = timeProvider.GetUtcNow();
+                var completed = latest.State with
+                {
+                    Ticket = Convert.ToBase64String(TicketSerializer.Default.Serialize(updated)),
+                    IdleExpiresAt = ActivityExpiration(latest.State, now),
+                    RefreshOperation = null,
+                    RefreshDeadline = null,
+                    RefreshAt = StoredSession.CalculateRefreshAt(DateTimeOffset.Parse(updated.Properties.GetTokenValue("expires_at")!,
+                        CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind), now)
+                };
+                if (await store.CompareExchangeAsync(latest, completed, ct)) return;
+            }
+            throw new SessionUnavailableException("Session changed repeatedly while completing refresh.");
+        }
+        catch (Exception e)
+        {
+            await InvalidateAsync(id);
+            await RevokeAsync(updated, CancellationToken.None);
+            throw new SessionUnavailableException("Unable to persist the rotated tokens.", e);
+        }
     }
 
     private async Task<bool> TryClaimAsync(SessionSnapshot snapshot, StoredSession claimed, CancellationToken ct)

@@ -11,8 +11,9 @@ using StackExchange.Redis;
 
 namespace MonixOne.OidcProxy.Yarp.Security;
 
-internal sealed class BffRequestMiddleware(RequestDelegate next)
+internal sealed class BffRequestMiddleware(RequestDelegate next, ILoggerFactory loggerFactory)
 {
+    private readonly ILogger _logger = loggerFactory.CreateLogger("MonixOne.OidcProxy.Yarp.Session");
     internal static void Register(IServiceCollection services)
     {
         services.AddAuthorization(authorization => authorization.AddPolicy(BffConstants.AuthorizationPolicy,
@@ -114,8 +115,10 @@ internal sealed class BffRequestMiddleware(RequestDelegate next)
             if (id is not null && context.Request.Path != OidcProxyRoutes.Logout &&
                 context.Request.Path != OidcProxyRoutes.Antiforgery)
             {
+                var snapshot = context.Items[BffConstants.SessionSnapshotItem] is ValueTuple<string, SessionSnapshot> cached &&
+                    cached.Item1 == client.Name && cached.Item2.Id == id ? cached.Item2 : null;
                 var ticket = await context.RequestServices.GetRequiredKeyedService<TokenSession>(client.Name)
-                    .GetActiveTicketAsync(id, context.RequestAborted);
+                    .GetActiveTicketAsync(id, context.RequestAborted, snapshot);
                 if (ticket is null)
                 {
                     await context.SignOutAsync(client.CookieScheme);
@@ -137,8 +140,7 @@ internal sealed class BffRequestMiddleware(RequestDelegate next)
         catch (Exception e) when (e is RedisException or RedisTimeoutException or SessionUnavailableException)
         {
             if (context.Response.HasStarted) throw;
-            context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("MonixOne.OidcProxy.Yarp.Session")
-                .LogError("BFF session unavailable. Failure type: {FailureType}", e.GetType().Name);
+            _logger.LogError("BFF session unavailable. Failure type: {FailureType}", e.GetType().Name);
             context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
         }
     }

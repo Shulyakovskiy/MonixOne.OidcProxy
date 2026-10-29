@@ -15,7 +15,8 @@ public sealed class OidcProxyClientOptions
     /// </summary>
     public string PathBase { get; set; } = string.Empty;
     /// <summary>
-    /// The inactivity lifetime of the server session.
+    /// The interval from the last accepted protected request. Activity extends
+    /// idle expiry exactly through CAS and never extends the absolute lifetime.
     /// </summary>
     public TimeSpan SessionIdleTimeout { get; set; } = TimeSpan.FromMinutes(20);
     /// <summary>

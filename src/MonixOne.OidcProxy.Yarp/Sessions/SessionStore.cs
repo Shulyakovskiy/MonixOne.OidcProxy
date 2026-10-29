@@ -1,8 +1,9 @@
-using System.Security.Cryptography;
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.Extensions.Hosting;
 using StackExchange.Redis;
 
 namespace MonixOne.OidcProxy.Yarp.Sessions;
@@ -12,8 +13,10 @@ namespace MonixOne.OidcProxy.Yarp.Sessions;
 /// the previously read value, so a late refresh cannot overwrite logout or newer tokens.
 /// Redis failures never fall back to an independent in-process session.
 /// </summary>
-internal sealed class SessionStore(BffClient client, ConnectionMultiplexer connection, IDataProtectionProvider protection, TimeProvider timeProvider)
+internal sealed class SessionStore(BffClient client, ConnectionMultiplexer connection, IDataProtectionProvider protection,
+    TimeProvider timeProvider, IHostApplicationLifetime lifetime)
 {
+    private readonly CancellationToken _stopping = lifetime.ApplicationStopping;
     private readonly IDataProtector _protector = protection.CreateProtector("MonixOne.OidcProxy.Yarp.ServerSession.v6", client.CookieName);
     private IDatabase Database => connection.GetDatabase();
 
@@ -40,9 +43,11 @@ internal sealed class SessionStore(BffClient client, ConnectionMultiplexer conne
                 CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind), now));
         var value = Encode(state);
         var key = client.RedisKeyPrefix + "sessions:" + id;
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_stopping);
+        timeout.CancelAfter(TimeSpan.FromSeconds(5));
         try
         {
+            timeout.Token.ThrowIfCancellationRequested();
             if (!await Database.StringSetAsync(key, value, Lifetime(state), When.NotExists).WaitAsync(timeout.Token))
                 throw new InvalidOperationException("Unable to allocate a unique server session.");
         }
@@ -51,6 +56,10 @@ internal sealed class SessionStore(BffClient client, ConnectionMultiplexer conne
             // An unacknowledged SET can leave an unreachable record until TTL.
             // Sign-in owns revocation of the credentials already issued by IdP.
             throw new SessionUnavailableException("Unable to confirm session creation within its server budget.", e);
+        }
+        catch (ObjectDisposedException e) when (_stopping.IsCancellationRequested)
+        {
+            throw new SessionUnavailableException("The session store is stopping.", e);
         }
         return id;
     }
@@ -88,7 +97,8 @@ internal sealed class SessionStore(BffClient client, ConnectionMultiplexer conne
     {
         var lifetime = updated is null ? TimeSpan.Zero : Lifetime(updated);
         return CompareExchangeRawAsync(client.RedisKeyPrefix + "sessions:" + expected.Id, expected.Value,
-            lifetime > TimeSpan.Zero && updated is not null ? Encode(updated) : null, lifetime, cancellationToken);
+            lifetime > TimeSpan.Zero && updated is not null ? updated == expected.State ? expected.Value : Encode(updated) : null,
+            lifetime, cancellationToken);
     }
 
     private async Task<bool> CompareExchangeRawAsync(string key, string expected, string? updated,

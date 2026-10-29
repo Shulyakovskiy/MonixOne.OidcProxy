@@ -6,6 +6,8 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
+using Microsoft.AspNetCore.WebUtilities;
 using StackExchange.Redis;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
@@ -17,6 +19,39 @@ namespace MonixOne.OidcProxy.Yarp.Tests;
 [Collection("Infrastructure")]
 public sealed class PreparedConfigurationTests(InfrastructureFixture infrastructure)
 {
+    [Fact]
+    public async Task Configuration_ReloadAndOptionsRecreation_KeepsTheStartedClientSnapshot()
+    {
+        // Arrange: native options can be recreated independently of BffClients.
+        var ct = TestContext.Current.CancellationToken;
+        using var identity = new OidcWireMock(infrastructure, "br-admin-identity-bff");
+        await using var host = new PreparedHost(infrastructure, identity);
+        using var browser = host.CreateClient(new WebApplicationFactoryClientOptions
+        { BaseAddress = new Uri("https://admin-dev.intra-beetroute.ru"), AllowAutoRedirect = false });
+        using var provider = identity.CreateIdentityBrowser();
+        var configuration = host.Services.GetRequiredService<IConfiguration>();
+
+        // Act: reproduce cache recreation after a source change; no package hot reload is supported.
+        configuration["Bff:Clients:adminidentity:PublicOrigin"] = "https://changed.example";
+        configuration["Bff:Clients:adminidentity:PathBase"] = "/changed";
+        configuration["Bff:Clients:adminidentity:OpenIdConnect:ClientId"] = "changed-client";
+        ((IConfigurationRoot)configuration).Reload();
+        host.Services.GetRequiredService<IOptionsMonitorCache<OidcProxyClientOptions>>().TryRemove("adminidentity");
+        host.Services.GetRequiredService<IOptionsMonitorCache<OpenIdConnectOptions>>()
+            .TryRemove(OidcProxyDefaults.OpenIdConnectScheme("adminidentity"));
+        using var start = await browser.GetAsync("/admin" + OidcProxyRoutes.Login, ct);
+        var query = QueryHelpers.ParseQuery(start.Headers.Location!.Query);
+        using var authorization = await provider.GetAsync(start.Headers.Location, ct);
+        using var login = await browser.GetAsync(authorization.Headers.Location, ct);
+        using var api = await browser.ApiAsync("/admin/api/status", ct);
+
+        // Assert
+        query["client_id"].ToString().ShouldBe("br-admin-identity-bff");
+        query["redirect_uri"].ToString().ShouldBe("https://admin-dev.intra-beetroute.ru/admin/.auth/login/callback");
+        login.StatusCode.ShouldBe(HttpStatusCode.Redirect);
+        api.StatusCode.ShouldBe(HttpStatusCode.OK);
+    }
+
     [Fact]
     public async Task Profile_BrAdminIdentityConfiguration_RegistersTheClientAndPassesCalendarCookies()
     {

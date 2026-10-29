@@ -1,10 +1,55 @@
 using System.Net;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MonixOne.OidcProxy.Yarp.Tests;
 
 [Collection("Infrastructure")]
 public sealed class RefreshLogoutTests(InfrastructureFixture infrastructure)
 {
+    [Fact]
+    public async Task Refresh_OwnerStopsAfterRedemption_OtherReplicaRejectsSessionWithoutRetry()
+    {
+        // Arrange
+        var ct = TestContext.Current.CancellationToken;
+        using var identity = new OidcWireMock(infrastructure)
+        { ReleaseRefresh = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+        var scope = Guid.NewGuid().ToString("N");
+        await using var host = identity.CreateBff(scope);
+        await using var replica = identity.CreateBff(scope);
+        using var browser = host.CreateBrowser();
+        using var other = replica.CreateBrowser(handleCookies: false);
+        using var provider = identity.CreateIdentityBrowser();
+        using var login = await browser.LoginAsync(provider);
+        other.DefaultRequestHeaders.Add("Cookie", login.Headers.GetValues("Set-Cookie")
+            .Single(value => value.StartsWith(OidcProxyDefaults.CookieName("spa") + "=", StringComparison.Ordinal)).Split(';')[0]);
+        host.Clock.Advance(TimeSpan.FromSeconds(110));
+        replica.Clock.Advance(TimeSpan.FromSeconds(110));
+        var owner = browser.ApiAsync(cancellationToken: ct);
+        await identity.RefreshStarted.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
+
+        // Act: the HTTP reply containing the new token is still held at the provider.
+        host.Services.GetRequiredService<IHostApplicationLifetime>().StopApplication();
+        HttpStatusCode? status = null;
+        var failure = await Record.ExceptionAsync(async () =>
+        {
+            using var response = await owner.WaitAsync(TimeSpan.FromSeconds(10), ct);
+            status = response.StatusCode;
+        });
+        using var rejected = await other.ApiAsync(cancellationToken: ct).WaitAsync(TimeSpan.FromSeconds(10), ct);
+        identity.ReleaseRefresh.TrySetResult();
+        using var repeated = await other.ApiAsync(cancellationToken: ct);
+
+        // Assert: shutdown may abort its caller; the surviving replica must never retry redemption.
+        if (failure is not null) failure.ShouldBeAssignableTo<OperationCanceledException>();
+        else status.ShouldBe(HttpStatusCode.ServiceUnavailable);
+        login.StatusCode.ShouldBe(HttpStatusCode.Redirect);
+        rejected.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
+        repeated.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
+        identity.RefreshRequests.ShouldBe(1);
+        identity.BackendRequests.ShouldBeEmpty();
+    }
+
     [Fact]
     public async Task Refresh_RedisUnavailableAfterRedemption_RevokesNewTokenAndInvalidatesOnRecovery()
     {

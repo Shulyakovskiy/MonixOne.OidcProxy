@@ -1,10 +1,82 @@
 using System.Net;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MonixOne.OidcProxy.Yarp.Tests;
 
 [Collection("Infrastructure")]
 public sealed class RedisMutationTests(InfrastructureFixture infrastructure)
 {
+    [Fact]
+    public async Task Login_HostStopsWithUnacknowledgedSet_RevokesKnownCredentials()
+    {
+        // Arrange
+        var ct = TestContext.Current.CancellationToken;
+        await using var gate = new RedisReplyGate(infrastructure);
+        using var connection = await gate.ConnectAsync();
+        using var identity = new OidcWireMock(infrastructure);
+        await using var host = identity.CreateBff(connection: connection);
+        using var browser = host.CreateBrowser();
+        using var provider = identity.CreateIdentityBrowser();
+        var creation = gate.HoldNextSessionReply("SET");
+        var login = browser.LoginAsync(provider);
+        await creation.Reached.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
+
+        // Act: the request's service provider may close before its async cleanup.
+        host.Services.GetRequiredService<IHostApplicationLifetime>().StopApplication();
+        await identity.RevocationCompleted.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
+        creation.Release.TrySetResult();
+        HttpStatusCode? status = null;
+        var failure = await Record.ExceptionAsync(async () =>
+        {
+            using var response = await login.WaitAsync(TimeSpan.FromSeconds(10), ct);
+            status = response.StatusCode;
+        });
+
+        // Assert
+        if (failure is not null) failure.ShouldBeAssignableTo<OperationCanceledException>();
+        else status.ShouldBe(HttpStatusCode.ServiceUnavailable);
+        identity.ActiveRefreshTokens.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task Refresh_ClaimReplyLostAndSessionLoggedOut_DoesNotRedeemWithoutOwnership()
+    {
+        // Arrange
+        var ct = TestContext.Current.CancellationToken;
+        await using var gate = new RedisReplyGate(infrastructure);
+        using var connection = await gate.ConnectAsync(asyncTimeout: 1000);
+        using var identity = new OidcWireMock(infrastructure);
+        var scope = Guid.NewGuid().ToString("N");
+        await using var host = identity.CreateBff(scope, connection);
+        await using var replica = identity.CreateBff(scope);
+        using var browser = host.CreateBrowser();
+        using var other = replica.CreateBrowser(handleCookies: false);
+        using var provider = identity.CreateIdentityBrowser();
+        using var login = await browser.LoginAsync(provider);
+        other.DefaultRequestHeaders.Add("Cookie", login.Headers.GetValues("Set-Cookie")
+            .Single(value => value.StartsWith(OidcProxyDefaults.CookieName("spa") + "=", StringComparison.Ordinal)).Split(';')[0]);
+        host.Clock.Advance(TimeSpan.FromSeconds(110));
+        replica.Clock.Advance(TimeSpan.FromSeconds(110));
+        var claim = gate.HoldNextSessionReply("EVAL", holdRecoveryReads: true);
+
+        // Act: ownership recovery reads Redis only after the other replica deleted the record.
+        var request = browser.ApiAsync(cancellationToken: ct);
+        await claim.Reached.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
+        await claim.RecoveryRead.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
+        using var logout = await other.LogoutAsync(cancellationToken: ct);
+        claim.ReleaseRecoveryRead.TrySetResult();
+        claim.Release.TrySetResult();
+        using var failed = await request;
+
+        // Assert
+        login.StatusCode.ShouldBe(HttpStatusCode.Redirect);
+        logout.StatusCode.ShouldBe(HttpStatusCode.Redirect);
+        failed.StatusCode.ShouldBe(HttpStatusCode.ServiceUnavailable);
+        identity.RefreshRequests.ShouldBe(0);
+        identity.BackendRequests.ShouldBeEmpty();
+    }
+
     [Fact]
     public async Task Logout_ConfirmedGetDel_DoesNotSendAnotherSessionDelete()
     {

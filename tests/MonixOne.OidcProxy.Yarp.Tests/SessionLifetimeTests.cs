@@ -2,12 +2,77 @@ using System.Net;
 using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Mvc.Testing;
 
 namespace MonixOne.OidcProxy.Yarp.Tests;
 
 [Collection("Infrastructure")]
 public sealed class SessionLifetimeTests(InfrastructureFixture infrastructure)
 {
+    [Fact]
+    public async Task Session_ExpiresAfterCookieValidation_DoesNotReviveCachedSnapshot()
+    {
+        // Arrange: expire the record between native validation and BFF activity.
+        var ct = TestContext.Current.CancellationToken;
+        using var identity = new OidcWireMock(infrastructure) { AccessTokenLifetime = 3600 };
+        await using var host = identity.CreateBff();
+        await using var delayed = host.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
+            services.PostConfigure<CookieAuthenticationOptions>(OidcProxyDefaults.CookieScheme("spa"), options =>
+            {
+                var validate = options.Events.OnValidatePrincipal;
+                options.Events.OnValidatePrincipal = async context =>
+                {
+                    await validate(context);
+                    if (context.Request.Path == "/api/status") host.Clock.Advance(TimeSpan.FromMinutes(21));
+                };
+            })));
+        using var browser = delayed.CreateClient(new WebApplicationFactoryClientOptions
+        { BaseAddress = BffApplicationFactory.Origin, AllowAutoRedirect = false });
+        using var provider = identity.CreateIdentityBrowser();
+        using var login = await browser.LoginAsync(provider);
+
+        // Act
+        using var expired = await browser.ApiAsync(cancellationToken: ct);
+
+        // Assert
+        login.StatusCode.ShouldBe(HttpStatusCode.Redirect);
+        expired.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
+        identity.RefreshRequests.ShouldBe(0);
+        identity.BackendRequests.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Session_RefreshCrossesPreviousIdleExpiry_KeepsAcceptedActivity()
+    {
+        // Arrange: refresh starts at +9 while the original idle expiry is +10.
+        var ct = TestContext.Current.CancellationToken;
+        using var identity = new OidcWireMock(infrastructure)
+        { AccessTokenLifetime = 10, ReleaseRefresh = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+        await using var host = identity.CreateBff();
+        host.ConfigureClientOptions = options => options.SessionIdleTimeout = TimeSpan.FromSeconds(10);
+        using var browser = host.CreateBrowser();
+        using var provider = identity.CreateIdentityBrowser();
+        using var login = await browser.LoginAsync(provider);
+        host.Clock.Advance(TimeSpan.FromSeconds(9));
+
+        // Act: the accepted refresh request must cover the old idle boundary.
+        var owner = browser.ApiAsync(cancellationToken: ct);
+        await identity.RefreshStarted.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
+        host.Clock.Advance(TimeSpan.FromSeconds(2));
+        var waiter = browser.ApiAsync(cancellationToken: ct);
+        identity.ReleaseRefresh.TrySetResult();
+        using var completed = await owner;
+        using var other = await waiter;
+
+        // Assert
+        login.StatusCode.ShouldBe(HttpStatusCode.Redirect);
+        completed.StatusCode.ShouldBe(HttpStatusCode.OK);
+        other.StatusCode.ShouldBe(HttpStatusCode.OK);
+        identity.RefreshRequests.ShouldBe(1);
+    }
+
     [Fact]
     public async Task Session_PreviousV6RecordWithoutRefreshAt_RemainsUsableAndMigratesOnActivity()
     {

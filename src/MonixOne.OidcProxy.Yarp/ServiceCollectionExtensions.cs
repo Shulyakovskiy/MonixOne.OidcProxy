@@ -30,8 +30,12 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddOidcProxy(this IServiceCollection services, IConfigurationSection configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
-        var clients = configuration.GetRequiredSection("Clients").GetChildren();
-        services.AddOidcProxy(configuration.Bind);
+        // All BFF schemes and the frozen client registry must use the same
+        // startup values, including when native options are later recreated.
+        var snapshot = new ConfigurationBuilder()
+            .AddInMemoryCollection(configuration.AsEnumerable(makePathsRelative: true)).Build();
+        var clients = snapshot.GetRequiredSection("Clients").GetChildren();
+        services.AddOidcProxy(snapshot.Bind);
         services.AddOptions<ProxyOptions>().Configure<IHostEnvironment>((options, environment) =>
             options.EnvironmentName = environment.EnvironmentName);
         foreach (var client in clients)
@@ -104,7 +108,7 @@ public static class ServiceCollectionExtensions
             .ValidateOnStart();
         services.AddKeyedSingleton<SessionStore>(name, (sp, _) => new SessionStore(sp.GetRequiredService<BffClients>().ByName[name],
             sp.GetRequiredService<ConnectionMultiplexer>(), sp.GetRequiredService<IDataProtectionProvider>(),
-            sp.GetRequiredService<TimeProvider>()));
+            sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<IHostApplicationLifetime>()));
         services.AddKeyedSingleton<TokenSession>(name, (sp, _) => new TokenSession(
             sp.GetRequiredKeyedService<SessionStore>(name), sp.GetRequiredService<BffClients>().ByName[name],
             sp.GetRequiredService<IOptionsMonitor<OpenIdConnectOptions>>(), sp.GetRequiredService<TimeProvider>(),

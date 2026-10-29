@@ -35,9 +35,9 @@ internal sealed class RedisReplyGate : IAsyncDisposable
             Protocol = RedisProtocol.Resp2
         });
 
-    internal Reply HoldNextSessionReply(string command)
+    internal Reply HoldNextSessionReply(string command, bool holdRecoveryReads = false)
     {
-        var reply = new Reply(command);
+        var reply = new Reply(command) { HoldRecoveryReads = holdRecoveryReads };
         Volatile.Write(ref _reply, reply);
         return reply;
     }
@@ -81,7 +81,10 @@ internal sealed class RedisReplyGate : IAsyncDisposable
                     var session = text.Contains(":sessions:", StringComparison.Ordinal);
                     var reply = Volatile.Read(ref _reply);
                     if (session && command == "GET" && reply?.Reached.Task.IsCompleted == true)
+                    {
                         reply.RecoveryRead.TrySetResult();
+                        if (reply.HoldRecoveryReads) await reply.ReleaseRecoveryRead.Task.WaitAsync(ct);
+                    }
                     await requests.Writer.WriteAsync((command, session), ct);
                     await server.GetStream().WriteAsync(frame, ct);
                 }
@@ -154,9 +157,11 @@ internal sealed class RedisReplyGate : IAsyncDisposable
     internal sealed class Reply(string command)
     {
         internal string Command { get; } = command;
+        internal bool HoldRecoveryReads { get; init; }
         internal int Claimed;
         internal TaskCompletionSource Reached { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource RecoveryRead { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource ReleaseRecoveryRead { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 }

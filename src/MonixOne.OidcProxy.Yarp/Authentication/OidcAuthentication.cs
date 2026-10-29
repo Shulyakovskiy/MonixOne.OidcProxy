@@ -52,7 +52,11 @@ internal static class OidcAuthentication
                         var snapshot = id is null ? null : await context.HttpContext.RequestServices
                             .GetRequiredKeyedService<SessionStore>(name).ReadAsync(id, context.HttpContext.RequestAborted);
                         if (snapshot is null) context.RejectPrincipal();
-                        else context.ReplacePrincipal(SessionPrincipal.WithSessionId(snapshot.State.ReadTicket().Principal, id!));
+                        else
+                        {
+                            context.ReplacePrincipal(SessionPrincipal.WithSessionId(snapshot.State.ReadTicket().Principal, id!));
+                            context.HttpContext.Items[BffConstants.SessionSnapshotItem] = (name, snapshot);
+                        }
                     }
                     catch (Exception e) when (e is RedisException or RedisTimeoutException or SessionUnavailableException)
                     {
@@ -167,6 +171,10 @@ internal static class OidcAuthentication
             var services = context.HttpContext.RequestServices;
             var now = services.GetRequiredService<TimeProvider>().GetUtcNow();
             var store = services.GetRequiredKeyedService<SessionStore>(name);
+            // These operations can outlive an aborted request or host shutdown.
+            // Capture cleanup dependencies before starting the server-owned SET.
+            var tokens = services.GetRequiredKeyedService<TokenSession>(name);
+            var sessionLogger = services.GetRequiredService<ILoggerFactory>().CreateLogger("MonixOne.OidcProxy.Yarp.Session");
             var properties = context.Properties!;
             properties.Items.TryGetValue(BffConstants.PreviousSession, out var previousId);
             properties.Items.Remove(BffConstants.PreviousSession);
@@ -183,7 +191,7 @@ internal static class OidcAuthentication
                     using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
                     var previousTicket = await store.TakeAsync(previousId, timeout.Token);
                     if (previousTicket is not null)
-                        await services.GetRequiredKeyedService<TokenSession>(name).RevokeAsync(previousTicket, CancellationToken.None);
+                        await tokens.RevokeAsync(previousTicket, CancellationToken.None);
                 }
                 // The cookie receives only a framework-protected random reference.
                 context.Principal = new ClaimsPrincipal(new ClaimsIdentity(
@@ -199,13 +207,12 @@ internal static class OidcAuthentication
                 {
                     using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
                     try { await store.RemoveAsync(id, timeout.Token); }
-                    catch (Exception e) when (e is RedisException or RedisTimeoutException or OperationCanceledException)
+                    catch (Exception e) when (e is RedisException or RedisTimeoutException or OperationCanceledException or ObjectDisposedException)
                     {
-                        services.GetRequiredService<ILoggerFactory>().CreateLogger("MonixOne.OidcProxy.Yarp.Session")
-                            .LogError("Unable to remove failed sign-in session. Failure type: {FailureType}", e.GetType().Name);
+                        sessionLogger.LogError("Unable to remove failed sign-in session. Failure type: {FailureType}", e.GetType().Name);
                     }
                 }
-                await services.GetRequiredKeyedService<TokenSession>(name).RevokeAsync(fullTicket, CancellationToken.None);
+                await tokens.RevokeAsync(fullTicket, CancellationToken.None);
                 if (failure is RedisException or RedisTimeoutException or SessionUnavailableException)
                 {
                     // TicketReceived runs after the native remote-authentication
@@ -213,8 +220,7 @@ internal static class OidcAuthentication
                     context.HandleResponse();
                     context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
                     context.Response.Headers.CacheControl = "no-store";
-                    services.GetRequiredService<ILoggerFactory>().CreateLogger("MonixOne.OidcProxy.Yarp.Session")
-                        .LogWarning("OIDC session creation failed. Failure type: {FailureType}", failure.GetType().Name);
+                    sessionLogger.LogWarning("OIDC session creation failed. Failure type: {FailureType}", failure.GetType().Name);
                     return;
                 }
                 throw;
