@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
+using Yarp.ReverseProxy.Configuration;
 using Yarp.ReverseProxy.Transforms;
 using Yarp.ReverseProxy.Transforms.Builder;
 
@@ -11,7 +12,7 @@ namespace MonixOne.OidcProxy.Yarp.Forwarding;
 /// Keeps browser credentials at the BFF boundary and limits forwarding to
 /// explicitly configured HTTPS backends with certificate validation enabled.
 /// </summary>
-internal sealed class BffTransformProvider(BffClients clients, TimeProvider clock, ILogger<BffTransformProvider> logger) : ITransformProvider
+internal sealed class BffTransformProvider(BffClients clients, TimeProvider clock, ILogger<BffTransformProvider> logger) : ITransformProvider, IProxyConfigFilter
 {
     public void ValidateRoute(TransformRouteValidationContext context)
     {
@@ -35,14 +36,22 @@ internal sealed class BffTransformProvider(BffClients clients, TimeProvider cloc
             context.Errors.Add(new ArgumentException($"BFF route '{context.Route.RouteId}' must match only its client's exact PublicOrigin authority."));
     }
 
-    public void ValidateCluster(TransformClusterValidationContext context)
+    public void ValidateCluster(TransformClusterValidationContext context) { }
+
+    public ValueTask<ClusterConfig> ConfigureClusterAsync(ClusterConfig cluster, CancellationToken cancellationToken)
+        => ValueTask.FromResult(cluster);
+
+    public ValueTask<RouteConfig> ConfigureRouteAsync(RouteConfig route, ClusterConfig? cluster, CancellationToken cancellationToken)
     {
-        if (context.Cluster.HttpClient?.DangerousAcceptAnyServerCertificate == true)
-            context.Errors.Add(new ArgumentException("BFF backends require TLS certificate validation."));
-        foreach (var destination in context.Cluster.Destinations?.Values ?? [])
+        if (route.Metadata?.ContainsKey(OidcProxyDefaults.ClientMetadataKey) != true) return ValueTask.FromResult(route);
+        if (cluster is null) throw new ArgumentException("A BFF route requires a configured cluster.");
+        if (cluster.HttpClient?.DangerousAcceptAnyServerCertificate == true)
+            throw new ArgumentException("BFF backends require TLS certificate validation.");
+        foreach (var destination in cluster.Destinations?.Values ?? [])
             if (!Uri.TryCreate(destination.Address, UriKind.Absolute, out var uri) || uri.Scheme != "https" ||
                 uri.UserInfo.Length != 0 || uri.Query.Length != 0 || uri.Fragment.Length != 0)
-                context.Errors.Add(new ArgumentException("BFF destinations must be explicit HTTPS addresses without credentials, query or fragment."));
+                throw new ArgumentException("BFF destinations must be explicit HTTPS addresses without credentials, query or fragment.");
+        return ValueTask.FromResult(route);
     }
 
     public void Apply(TransformBuilderContext context)

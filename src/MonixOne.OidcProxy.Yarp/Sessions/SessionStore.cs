@@ -41,38 +41,33 @@ internal sealed class SessionStore(BffClient client, ConnectionMultiplexer conne
         return id;
     }
 
-    internal Task<SessionSnapshot?> ReadAsync(string id, CancellationToken cancellationToken)
-        => ReadCoreAsync(id, cancellationToken, 16);
-
-    private async Task<SessionSnapshot?> ReadCoreAsync(string id, CancellationToken cancellationToken, int attemptsLeft)
+    internal async Task<SessionSnapshot?> ReadAsync(string id, CancellationToken cancellationToken)
     {
         if (!IsValidId(id)) return null;
         var key = client.RedisKeyPrefix + "sessions:" + id;
-        string? value = await Database.StringGetAsync(key).WaitAsync(cancellationToken);
-        if (value is null) return null;
+        for (var attempt = 0; attempt <= 16; attempt++)
+        {
+            string? value = await Database.StringGetAsync(key).WaitAsync(cancellationToken);
+            if (value is null) return null;
 
-        StoredSession state;
-        try
-        {
-            state = JsonSerializer.Deserialize<StoredSession>(_protector.Unprotect(value))
-                ?? throw new CryptographicException("Invalid server session.");
-        }
-        catch (Exception e) when (e is CryptographicException or JsonException)
-        {
-            // Do not authenticate a corrupt or tampered ticket, and do not log its contents.
+            StoredSession? state = null;
+            try
+            {
+                state = JsonSerializer.Deserialize<StoredSession>(_protector.Unprotect(value));
+            }
+            catch (Exception e) when (e is CryptographicException or JsonException)
+            {
+                // Invalid protected data is rejected and removed below. Never log it.
+            }
+            var now = timeProvider.GetUtcNow();
+            if (state is not null && state.AbsoluteExpiresAt > now && state.IdleExpiresAt > now)
+                return new SessionSnapshot(id, value, state);
+
+            // Expired and corrupt records share the same CAS deletion. A concurrent
+            // update must be reread rather than deleting another request's result.
             if (await CompareExchangeRawAsync(key, value, null, TimeSpan.Zero, cancellationToken)) return null;
-            if (attemptsLeft > 0) return await ReadCoreAsync(id, cancellationToken, attemptsLeft - 1);
-            throw new SessionUnavailableException("Session changed repeatedly while rejecting a corrupt record.");
         }
-
-        var snapshot = new SessionSnapshot(id, value, state);
-        if (state.AbsoluteExpiresAt <= timeProvider.GetUtcNow() || state.IdleExpiresAt <= timeProvider.GetUtcNow())
-        {
-            if (await CompareExchangeAsync(snapshot, null, cancellationToken)) return null;
-            if (attemptsLeft > 0) return await ReadCoreAsync(id, cancellationToken, attemptsLeft - 1);
-            throw new SessionUnavailableException("Session changed repeatedly while expiring a record.");
-        }
-        return snapshot;
+        throw new SessionUnavailableException("Session changed repeatedly while reading its state.");
     }
 
     internal Task<bool> CompareExchangeAsync(SessionSnapshot expected, StoredSession? updated, CancellationToken cancellationToken)
@@ -103,7 +98,7 @@ internal sealed class SessionStore(BffClient client, ConnectionMultiplexer conne
     {
         if (!IsValidId(id)) return null;
         var key = client.RedisKeyPrefix + "sessions:" + id;
-        string? value = (string?)await Database.StringGetDeleteAsync(key).WaitAsync(cancellationToken);
+        string? value = await Database.StringGetDeleteAsync(key).WaitAsync(cancellationToken);
         if (value is null) return null;
         try
         {

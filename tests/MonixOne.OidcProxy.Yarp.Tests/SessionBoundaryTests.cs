@@ -6,6 +6,31 @@ namespace MonixOne.OidcProxy.Yarp.Tests;
 public sealed class SessionBoundaryTests(InfrastructureFixture infrastructure)
 {
     [Fact]
+    public async Task Proxy_CorruptRedisRecord_RejectsAndRemovesTheRecord()
+    {
+        // Arrange
+        var ct = TestContext.Current.CancellationToken;
+        using var identity = new OidcWireMock(infrastructure);
+        await using var host = identity.CreateBff();
+        using var browser = host.CreateBrowser();
+        using var provider = identity.CreateIdentityBrowser();
+        using var login = await browser.LoginAsync(provider);
+        var server = infrastructure.Connection.GetServer(infrastructure.Connection.GetEndPoints().Single());
+        var key = server.Keys(pattern: "test-spa:testing:" + host.KeyNamespace + ":spa:sessions:*").Single();
+        await infrastructure.Connection.GetDatabase().StringSetAsync(key, "invalid-protected-record");
+
+        // Act
+        using var first = await browser.ApiAsync(cancellationToken: ct);
+        using var repeated = await browser.ApiAsync(cancellationToken: ct);
+
+        // Assert
+        first.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
+        repeated.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
+        (await infrastructure.Connection.GetDatabase().KeyExistsAsync(key)).ShouldBeFalse();
+        identity.BackendRequests.ShouldBeEmpty();
+    }
+
+    [Fact]
     public async Task Proxy_RedisConnectionUnavailable_FailsClosedWithoutSendingToApi()
     {
         // Arrange

@@ -1,4 +1,5 @@
-using Microsoft.Net.Http.Headers;
+using Microsoft.AspNetCore.Http;
+using CookieHeaderValue = Microsoft.Net.Http.Headers.CookieHeaderValue;
 
 namespace MonixOne.OidcProxy.Yarp;
 
@@ -25,7 +26,7 @@ public sealed class OidcProxyCookiePolicy
     /// Minimum SameSite protection. A stricter backend value is retained.
     /// Set None explicitly for cross-site POST callbacks whose backend also emits None.
     /// </summary>
-    public Microsoft.AspNetCore.Http.SameSiteMode SameSite { get; set; } = Microsoft.AspNetCore.Http.SameSiteMode.Lax;
+    public SameSiteMode SameSite { get; set; } = SameSiteMode.Lax;
     /// <summary>
     /// Optional upper bound for an existing persistent expiry. Session cookies
     /// remain session cookies; this setting never extends the backend lifetime.
@@ -36,12 +37,14 @@ public sealed class OidcProxyCookiePolicy
         ? name.StartsWith(pattern[..^1], StringComparison.Ordinal)
         : name == pattern);
 
-    internal bool IsValid(Uri? origin) => !string.IsNullOrWhiteSpace(ClusterId) && Names is { Length: > 0 } &&
-        Names.All(IsValidPattern) && Names.Distinct(StringComparer.Ordinal).Count() == Names.Length &&
-        !string.IsNullOrEmpty(Path) && Path.StartsWith('/') && !Path.StartsWith("//", StringComparison.Ordinal) &&
-        Uri.TryCreate(origin, Path, out var uri) && uri.AbsolutePath == Path && uri.Query.Length == 0 && uri.Fragment.Length == 0 &&
-        SameSite is Microsoft.AspNetCore.Http.SameSiteMode.None or Microsoft.AspNetCore.Http.SameSiteMode.Lax or Microsoft.AspNetCore.Http.SameSiteMode.Strict &&
-        (MaxAge is null || MaxAge > TimeSpan.Zero && MaxAge <= TimeSpan.FromDays(365));
+    internal bool IsValid(Uri? origin)
+    {
+        if (string.IsNullOrWhiteSpace(ClusterId) || Names is not { Length: > 0 } || !Names.All(IsValidPattern)) return false;
+        if (string.IsNullOrEmpty(Path) || !Path.StartsWith('/') ||
+            !Uri.TryCreate(origin, Path, out var uri) || uri.AbsolutePath != Path) return false;
+        return SameSite is SameSiteMode.None or SameSiteMode.Lax or SameSiteMode.Strict &&
+            (MaxAge is null || MaxAge > TimeSpan.Zero && MaxAge <= TimeSpan.FromDays(365));
+    }
 
     private static bool IsValidPattern(string pattern)
     {

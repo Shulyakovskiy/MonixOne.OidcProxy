@@ -13,6 +13,7 @@ using MonixOne.OidcProxy.Yarp.Security;
 using MonixOne.OidcProxy.Yarp.Sessions;
 using StackExchange.Redis;
 using Yarp.ReverseProxy;
+using Yarp.ReverseProxy.Configuration;
 using Yarp.ReverseProxy.Transforms.Builder;
 
 namespace MonixOne.OidcProxy.Yarp;
@@ -29,10 +30,8 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddOidcProxy(this IServiceCollection services, IConfigurationSection configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
-        var clients = configuration.GetRequiredSection("Clients").GetChildren().ToArray();
-        if (clients.Length == 0)
-            throw new InvalidOperationException($"{configuration.Path}:Clients must contain at least one SPA client.");
-        services.AddOidcProxy(options => configuration.Bind(options));
+        var clients = configuration.GetRequiredSection("Clients").GetChildren();
+        services.AddOidcProxy(configuration.Bind);
         services.AddOptions<ProxyOptions>().Configure<IHostEnvironment>((options, environment) =>
             options.EnvironmentName = environment.EnvironmentName);
         foreach (var client in clients)
@@ -74,7 +73,9 @@ public static class ServiceCollectionExtensions
         services.Replace(ServiceDescriptor.Singleton<IAuthenticationSchemeProvider, HostAuthenticationSchemeProvider>());
         RedisSessionRegistration.Register(services);
         BffRequestMiddleware.Register(services);
-        services.AddSingleton<ITransformProvider, BffTransformProvider>();
+        services.AddSingleton<BffTransformProvider>();
+        services.AddSingleton<ITransformProvider>(sp => sp.GetRequiredService<BffTransformProvider>());
+        services.AddSingleton<IProxyConfigFilter>(sp => sp.GetRequiredService<BffTransformProvider>());
         return services;
     }
 
@@ -96,7 +97,7 @@ public static class ServiceCollectionExtensions
         services.AddOptions<OidcProxyClientOptions>(name).Configure(configureClient)
             .Validate(o => o.HasValidOrigin, "PublicOrigin must be an HTTPS origin without path, credentials, query or fragment.")
             .Validate(o => o.HasValidPathBase, "PathBase must be empty or a canonical URI-escaped path without a trailing slash.")
-            .Validate(o => o.CookiePolicies is not null && o.CookiePolicies.All(pair => ProxyOptions.IsKeySegment(pair.Key) && pair.Key == pair.Key.ToLowerInvariant() && pair.Value is not null && pair.Value.IsValid(o.PublicOrigin)),
+            .Validate(o => 0o.CookiePolicies.All(pair => ProxyOptions.IsKeySegment(pair.Key) && pair.Key == pair.Key.ToLowerInvariant() && pair.Value is not null && pair.Value.IsValid(o.PublicOrigin)),
                 "CookiePolicies require lowercase policy names, a ClusterId, valid cookie names/prefixes, a canonical path and valid SameSite/MaxAge.")
             .Validate(o => o.SessionIdleTimeout > TimeSpan.Zero && o.SessionAbsoluteTimeout >= o.SessionIdleTimeout && o.SessionAbsoluteTimeout <= TimeSpan.FromDays(365),
                 "SessionAbsoluteTimeout must be between SessionIdleTimeout and 365 days; both must be positive.")

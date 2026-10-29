@@ -12,8 +12,8 @@ internal static class ForwardedCookies
     internal static bool ApplyRequest(RequestTransformContext context, BffClient client, string policyName, OidcProxyCookiePolicy policy)
     {
         var path = context.HttpContext.Request.Path.ToUriComponent();
-        if (path != policy.Path && !(path.StartsWith(policy.Path, StringComparison.Ordinal) &&
-            (policy.Path.EndsWith('/') || path.Length > policy.Path.Length && path[policy.Path.Length] == '/'))) return true;
+        if (!path.StartsWith(policy.Path, StringComparison.Ordinal)) return true;
+        if (path.Length > policy.Path.Length && !policy.Path.EndsWith('/') && path[policy.Path.Length] != '/') return true;
         var raw = context.HttpContext.Request.Headers.Cookie;
         if (raw.Count == 0) return true;
         if (!CookieHeaderValue.TryParseStrictList(raw.Select(value => value!).ToArray(), out var cookies)) return false;
@@ -41,15 +41,15 @@ internal static class ForwardedCookies
         if (!SetCookieHeaderValue.TryParseStrictList(raw!.ToArray(), out var cookies)) return false;
         var prefix = Prefix(client, policyName);
         var path = client.Options.PathBase + policy.Path;
+        var minimum = policy.SameSite switch
+        {
+            Microsoft.AspNetCore.Http.SameSiteMode.None => HeaderSameSite.None,
+            Microsoft.AspNetCore.Http.SameSiteMode.Strict => HeaderSameSite.Strict,
+            _ => HeaderSameSite.Lax
+        };
         foreach (var cookie in cookies.Where(cookie => policy.Matches(cookie.Name.ToString())))
         {
             var sameSite = cookie.SameSite == HeaderSameSite.Unspecified ? HeaderSameSite.Lax : cookie.SameSite;
-            var minimum = policy.SameSite switch
-            {
-                Microsoft.AspNetCore.Http.SameSiteMode.None => HeaderSameSite.None,
-                Microsoft.AspNetCore.Http.SameSiteMode.Strict => HeaderSameSite.Strict,
-                _ => HeaderSameSite.Lax
-            };
             var forwarded = new SetCookieHeaderValue(prefix + cookie.Name.ToString(), cookie.Value)
             {
                 // Host-only, scoped and always inaccessible to JavaScript. Native

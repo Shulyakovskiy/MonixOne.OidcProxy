@@ -41,7 +41,7 @@ internal static class OidcAuthentication
                 };
                 cookie.Events.OnValidatePrincipal = async context =>
                 {
-                    if (!context.HttpContext.RequestServices.GetRequiredService<BffClients>().ByName[name].Matches(context.Request))
+                    if (context.HttpContext.RequestServices.GetRequiredService<BffClients>().Find(context.Request)?.Name != name)
                     {
                         context.RejectPrincipal();
                         return;

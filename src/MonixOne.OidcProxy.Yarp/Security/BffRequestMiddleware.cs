@@ -52,7 +52,7 @@ internal sealed class BffRequestMiddleware(RequestDelegate next)
             await next(context);
             return;
         }
-        if (!client.Matches(context.Request))
+        if (clients.Find(context.Request)?.Name != client.Name)
         {
             context.Response.StatusCode = StatusCodes.Status403Forbidden;
             return;
@@ -133,10 +133,6 @@ internal sealed class BffRequestMiddleware(RequestDelegate next)
                     context.User, authentication.Properties!, client.CookieScheme))
             });
             await next(context);
-        }
-        catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
-        {
-            throw;
         }
         catch (Exception e) when (e is RedisException or RedisTimeoutException or SessionUnavailableException)
         {

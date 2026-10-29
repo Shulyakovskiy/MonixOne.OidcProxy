@@ -10,9 +10,6 @@ internal sealed record BffClient(string Name, OidcProxyClientOptions Options, st
     internal string CookieScheme => OidcProxyDefaults.CookieScheme(Name);
     internal string OpenIdConnectScheme => OidcProxyDefaults.OpenIdConnectScheme(Name);
     internal string CookieName => OidcProxyDefaults.CookieName(Name);
-    internal bool Matches(HttpRequest request) => request.IsHttps &&
-        string.Equals(request.Host.Host, Options.PublicOrigin!.IdnHost, StringComparison.OrdinalIgnoreCase) &&
-        (request.Host.Port ?? 443) == Options.PublicOrigin.Port;
 }
 
 internal sealed class BffClients
