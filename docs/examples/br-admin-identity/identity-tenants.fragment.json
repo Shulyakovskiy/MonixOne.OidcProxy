@@ -1,0 +1,22 @@
+{
+  "IdentityTenants": {
+    "Tenants": [
+      {
+        "Id": "mbr",
+        "Identifier": "mbr",
+        "ClientIds": [
+          "mobile-app",
+          "web-app",
+          "br-admin-identity-bff"
+        ]
+      },
+      {
+        "Id": "lkb",
+        "Identifier": "lkb",
+        "ClientIds": [
+          "lkb-web"
+        ]
+      }
+    ]
+  }
+}

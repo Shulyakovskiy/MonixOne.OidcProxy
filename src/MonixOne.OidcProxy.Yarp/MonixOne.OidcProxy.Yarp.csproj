@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <PackageId>MonixOne.OidcProxy.Yarp</PackageId>
+        <Title>MonixOne.OidcProxy.Yarp</Title>
+        <RootNamespace>MonixOne.OidcProxy.Yarp</RootNamespace>
+        <PackageTags>aspnetcore;bff;spa;yarp;oauth2;openid-connect;openiddict;redis</PackageTags>
+        <PackageIcon>nuget-icon.png</PackageIcon>
+        <Version>6.0.0</Version>
+        <Authors>Albert Starreveld; Shulyakovsky.E</Authors>
+        <Company>MonixOne</Company>
+        <Copyright>MonixOne contributors; upstream copyright retained</Copyright>
+        <Description>A .NET 10 Backend-for-Frontend for single-page applications using YARP and standard OpenID Connect. Keeps OAuth tokens in protected Redis sessions, forwards user access tokens to configured APIs, and coordinates refresh and logout across replicas. Compatible with OpenIddict.</Description>
+        <RepositoryType>git</RepositoryType>
+        <PublishRepositoryUrl>true</PublishRepositoryUrl>
+        <GenerateDocumentationFile>true</GenerateDocumentationFile>
+        <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+        <IncludeSymbols>true</IncludeSymbols>
+        <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+        <RepositoryUrl>https://github.com/Shulyakovskiy/MonixOne.OidcProxy.Yarp</RepositoryUrl>
+        <PackageProjectUrl>https://github.com/Shulyakovskiy/MonixOne.OidcProxy.Yarp</PackageProjectUrl>
+        <PackageLicenseExpression>LGPL-3.0-only</PackageLicenseExpression>
+        <PackageReadmeFile>README.md</PackageReadmeFile>
+        <PackageReleaseNotes>YARP-based SPA BFF with standard OIDC, Redis sessions and atomic refresh/logout. See README.md.</PackageReleaseNotes>
+    </PropertyGroup>
+    <ItemGroup>
+        <FrameworkReference Include="Microsoft.AspNetCore.App" />
+        <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" />
+        <PackageReference Include="Microsoft.AspNetCore.DataProtection.StackExchangeRedis" />
+        <PackageReference Include="Duende.IdentityModel" />
+        <PackageReference Include="Yarp.ReverseProxy" />
+        <PackageReference Include="StackExchange.Redis" />
+        <None Include="../../assets/NuGet.md" Pack="true" PackagePath="/README.md" />
+        <None Include="../../assets/nuget-icon.png" Link="nuget-icon.png" Pack="true" PackagePath="/" />
+        <None Include="../../license.txt" Pack="true" PackagePath="/" />
+    </ItemGroup>
+</Project>

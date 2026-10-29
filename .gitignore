@@ -455,3 +455,4 @@ $RECYCLE.BIN/
 samples/**/ClientApp/node_modules/
 samples/**/ClientApp/coverage/
 samples/**/wwwroot/
+samples/**/ClientApp/public/docs-assets/
