@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Extensions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
@@ -123,14 +124,14 @@ internal static class OidcAuthentication
         oidc.Events.OnRedirectToIdentityProvider = async context =>
         {
             await redirect(context);
-            context.ProtocolMessage.RedirectUri = new Uri(options.PublicOrigin!,
-                context.Request.PathBase.Add(OidcProxyRoutes.LoginCallback).ToString()).AbsoluteUri;
+            context.ProtocolMessage.RedirectUri = UriHelper.BuildAbsolute(options.PublicOrigin!.Scheme,
+                HostString.FromUriComponent(options.PublicOrigin.Authority), context.Request.PathBase, OidcProxyRoutes.LoginCallback);
         };
         oidc.Events.OnRedirectToIdentityProviderForSignOut = context =>
         {
             context.ProtocolMessage.ClientId = oidc.ClientId;
-            context.ProtocolMessage.PostLogoutRedirectUri = new Uri(options.PublicOrigin!,
-                context.Request.PathBase.Add(oidc.SignedOutCallbackPath).ToString()).AbsoluteUri;
+            context.ProtocolMessage.PostLogoutRedirectUri = UriHelper.BuildAbsolute(options.PublicOrigin!.Scheme,
+                HostString.FromUriComponent(options.PublicOrigin.Authority), context.Request.PathBase, oidc.SignedOutCallbackPath);
             context.ProtocolMessage.IdTokenHint = context.HttpContext.Items[BffConstants.LogoutIdTokenItem] as string;
             return Task.CompletedTask;
         };

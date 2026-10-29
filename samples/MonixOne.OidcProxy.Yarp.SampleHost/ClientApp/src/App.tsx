@@ -11,6 +11,9 @@ type Session =
   | { status: "error" };
 
 export default function App() {
+  const loginHref = `${routes.login}?${new URLSearchParams({
+    returnUrl: window.location.pathname + window.location.search + window.location.hash,
+  })}`;
   const queryClient = useQueryClient();
   const [apiPending, setApiPending] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
@@ -111,7 +114,7 @@ export default function App() {
         )}
         <div className="actions">
           {session.status === "anonymous" && (
-            <a className="button" href={routes.login}>
+            <a className="button" href={loginHref}>
               Войти через OpenID Connect <span aria-hidden>↗</span>
             </a>
           )}

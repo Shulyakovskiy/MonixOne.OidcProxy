@@ -32,9 +32,17 @@ export function validateSetup(setup: Setup): string[] {
     if (!/^[a-zA-Z0-9._-]{1,64}$/.test(setup[field]))
       errors.push(`${field}: 1–64 символа ASCII, буквы, цифры, точка, дефис или подчёркивание.`);
   }
-  if (setup.pathBase && (!/^\/[a-zA-Z0-9._~-]+(?:\/[a-zA-Z0-9._~-]+)*$/.test(setup.pathBase) ||
-      setup.pathBase.split("/").some(segment => segment === "." || segment === "..")))
-    errors.push("PathBase: пустая строка для корня или абсолютный ASCII путь без trailing slash и dot segments.");
+  if (setup.pathBase) {
+    let validPath = false;
+    try {
+      const parsed = new URL(setup.pathBase, setup.origin);
+      validPath = setup.pathBase.startsWith("/") && !setup.pathBase.startsWith("//") &&
+        !/[\u0000-\u001f\u007f\\?#]/.test(setup.pathBase) &&
+        parsed.origin === new URL(setup.origin).origin &&
+        decodeURI(parsed.pathname) === decodeURI(setup.pathBase);
+    } catch { /* The format error is shown below, without a network request. */ }
+    if (!validPath) errors.push("PathBase: пустая строка для корня или URL-путь без query, fragment, control characters и dot segments.");
+  }
   if (!setup.clientId.trim()) errors.push("Client ID обязателен.");
   const scopes = setup.scopes.trim().split(/\s+/);
   if (!scopes.includes("openid")) errors.push("Добавьте scope openid.");
@@ -81,22 +89,24 @@ builder.Services.AddOidcProxy(bff =>
 
 var app = builder.Build();
 app.Services.GetRequiredService<ConnectionMultiplexer>();
-app.UsePathBase(builder.Configuration["PathBase"] ?? string.Empty);
+app.UsePathBase(PathString.FromUriComponent(builder.Configuration["PathBase"] ?? string.Empty));
 if (!app.Environment.IsDevelopment()) app.UseHsts();
 app.UseHttpsRedirection();
 app.UseDefaultFiles();
 app.UseStaticFiles();
 app.UseOidcProxy();
-app.MapFallbackToFile("index.html").AllowAnonymous();
+app.MapFallbackToFile("{**path}", "index.html").AllowAnonymous();
 app.Run();`;
 
 export function createSpaCode(pathBase: string) {
   const routes = createRoutes(pathBase);
   return `// Login is a top-level browser navigation, never fetch().
-window.location.assign("${routes.login}");
+const login = new URL(${JSON.stringify(routes.login)}, window.location.origin);
+login.searchParams.set("returnUrl", window.location.pathname + window.location.search + window.location.hash);
+window.location.assign(login.pathname + login.search);
 
 // Only the same-origin BFF receives the session cookie.
-const response = await fetch("${routes.user}", {
+const response = await fetch(${JSON.stringify(routes.user)}, {
   credentials: "same-origin",
   headers: { "X-CSRF": "1", Accept: "application/json" },
 });
@@ -114,7 +124,7 @@ export const flows = {
   login: {
     title: "Вход", summary: "Authorization Code + PKCE: SPA инициирует переход, BFF обменивает код по backchannel.",
     steps: [
-      ["Браузер → BFF", "Пользователь открывает /.auth/login обычной навигацией. ASP.NET Core создаёт state, nonce, PKCE verifier и временные correlation/nonce cookies. Return URL — корень приложения с учётом PathBase.", "В браузере нет client secret или code verifier, доступного JavaScript."],
+      ["Браузер → BFF", "Пользователь открывает /.auth/login обычной навигацией. ASP.NET Core создаёт state, nonce, PKCE verifier и временные correlation/nonce cookies. Без returnUrl возврат идёт к корню приложения. Локальный returnUrl сохраняет deep link, query и fragment; ASP.NET Core проверяет его и BFF защищает в state.", "В браузере нет client secret или code verifier, доступного JavaScript."],
       ["BFF → OpenID Provider", "Браузер перенаправляется на authorization endpoint из discovery. Передаются client_id, redirect_uri, response_type=code, scope и code_challenge S256. Пользователь входит на стороне провайдера.", "Провайдер проверяет точный redirect URI и регистрацию confidential client."],
       ["Provider → BFF callback", "Провайдер возвращает code и state на /.auth/login/callback. Framework проверяет state и correlation, затем BFF один раз обменивает code с client secret и PKCE verifier.", "Код не передаётся SPA. Не повторяйте обмен после неопределённого сетевого исхода."],
       ["BFF → Redis → браузер", "Framework проверяет ID token: подпись, issuer, audience, lifetime и nonce. Полный ticket с токенами защищается Data Protection и записывается в Redis. Браузеру выдаётся защищённая случайная ссылка в cookie, затем redirect к корню приложения.", "Session cookie: Secure, HttpOnly, SameSite=Strict, Path=/, без Domain. Временные OIDC cookies имеют необходимые framework-настройки для внешнего callback."],

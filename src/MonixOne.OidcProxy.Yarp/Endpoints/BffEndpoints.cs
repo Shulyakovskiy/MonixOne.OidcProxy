@@ -1,8 +1,11 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.Extensions.DependencyInjection;
 using MonixOne.OidcProxy.Yarp.Sessions;
 using StackExchange.Redis;
 
@@ -12,11 +15,14 @@ internal static class BffEndpoints
 {
     internal static void Map(WebApplication app)
     {
+        var options = app.Services.GetRequiredService<ProxyOptions>();
         app.MapGet(OidcProxyRoutes.Login, async (HttpContext context) =>
         {
+            var returnUrl = GetReturnUrl(context, options);
+            if (returnUrl is null) return Results.BadRequest();
             var properties = new AuthenticationProperties
             {
-                RedirectUri = context.Request.PathBase.Add(OidcProxyRoutes.ApplicationRoot).ToString()
+                RedirectUri = returnUrl
             };
             var previous = await context.AuthenticateAsync(OidcProxyDefaults.CookieScheme);
             if (context.Items.ContainsKey(typeof(SessionUnavailableException)))
@@ -48,6 +54,8 @@ internal static class BffEndpoints
 
         app.MapPost(OidcProxyRoutes.Logout, async (HttpContext context, SessionStore store, TokenSession tokens) =>
         {
+            var returnUrl = GetReturnUrl(context, options);
+            if (returnUrl is null) return Results.BadRequest();
             var id = context.User.FindFirstValue(BffConstants.SessionClaim)!;
             // Once logout is authorized, a browser disconnect must not interrupt
             // its local invalidation. GETDEL returns the tokens current at deletion,
@@ -62,9 +70,24 @@ internal static class BffEndpoints
             }
             return Results.SignOut(new AuthenticationProperties
             {
-                RedirectUri = context.Request.PathBase.Add(OidcProxyRoutes.ApplicationRoot).ToString()
+                RedirectUri = returnUrl
             }, [OidcProxyDefaults.OpenIdConnectScheme]);
         }).RequireAuthorization(BffConstants.AuthorizationPolicy).WithMetadata(BffConstants.ApiMetadata);
 
+    }
+
+    private static string? GetReturnUrl(HttpContext context, ProxyOptions options)
+    {
+        var values = context.Request.Query[CookieAuthenticationDefaults.ReturnUrlParameter];
+        if (values.Count == 0)
+            return context.Request.PathBase.Add(OidcProxyRoutes.ApplicationRoot).ToString();
+        if (values.Count != 1) return null;
+        var candidate = values.ToString();
+        if (!RedirectHttpResult.IsLocalUrl(candidate)) return null;
+        if (candidate.StartsWith("~/", StringComparison.Ordinal))
+            candidate = context.Request.PathBase + candidate[1..];
+        if (!Uri.TryCreate(options.PublicOrigin, candidate, out var target)) return null;
+        // Emit a canonical local URL, retaining query/fragment and URI escaping.
+        return target.PathAndQuery + target.Fragment;
     }
 }

@@ -16,7 +16,7 @@ it("offers top-level Identity login when no session exists", async () => {
   renderApp();
   expect(
     await screen.findByRole("link", { name: /Войти через OpenID Connect/ }),
-  ).toHaveAttribute("href", "/.auth/login");
+  ).toHaveAttribute("href", "/.auth/login?returnUrl=%2F");
 });
 
 it("displays an unavailable backend and can retry", async () => {

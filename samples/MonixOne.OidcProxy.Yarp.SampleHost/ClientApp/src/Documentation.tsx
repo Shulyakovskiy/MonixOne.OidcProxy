@@ -40,8 +40,8 @@ export default function Documentation() {
   const targetRoutes = createRoutes(setup.pathBase);
   const current = flows[flow];
   const detail = current.steps[flowStep]!;
-  const callback = valid ? `${new URL(setup.origin).origin}${setup.pathBase}/.auth/login/callback` : "Исправьте URL на шаге 1";
-  const logoutCallback = valid ? `${new URL(setup.origin).origin}${setup.pathBase}/.auth/signout-callback` : "Исправьте URL на шаге 1";
+  const callback = valid ? new URL(targetRoutes.loginCallback, setup.origin).href : "Исправьте URL на шаге 1";
+  const logoutCallback = valid ? new URL(targetRoutes.logoutCallback, setup.origin).href : "Исправьте URL на шаге 1";
 
   return <div className="docs">
     <header className="doc-header">
@@ -98,14 +98,14 @@ export default function Documentation() {
             <p>Пакет ещё не опубликован в NuGet. Сейчас используются ProjectReference из репозитория или локально собранный nupkg. Добавляйте YARP и ConnectionMultiplexer перед AddOidcProxy. Конфигурация OIDC — стандартный OpenIdConnectOptions.</p>
             {valid ? <Code label="appsettings.json — без секретов" value={createConfiguration(setup)} /> : <p role="alert" className="doc-note doc-error">Сначала исправьте параметры на шаге «Топология».</p>}
             <Code label="Program.cs" value={hostCode} />
-            <p>Пример передаёт путь <code>/api/…</code> без преобразования. Для другого API пути используйте стандартные YARP transforms. Для размещения SPA под путём задайте PathBase хосту, соберите Vite с тем же base и сохраните префикс на ingress. Все MapReverseProxy-маршруты этого BFF требуют его сессию и CSRF header.</p>
+            <p>Пример передаёт путь <code>/api/…</code> без преобразования. YARP Match.Path может описывать любые API пути, а transforms — менять их перед отправкой. SPA fallback <code>{"{**path}"}</code> обрабатывает все остальные GET/HEAD пути, включая сегменты с точками. Для размещения SPA под путём задайте PathBase хосту, соберите Vite с тем же base и сохраните префикс на ingress. Все MapReverseProxy-маршруты этого BFF требуют его сессию и CSRF header.</p>
             <details><summary>TLS termination и ingress</summary><p>PublicOrigin — внешний адрес браузера. Если TLS завершается на ingress, настройте стандартный ForwardedHeaders middleware перед HSTS/HTTPS redirection и BFF. Доверяйте только конкретным KnownProxies/KnownNetworks. Не доверяйте произвольному входящему X-Forwarded-*; не отключайте TLS validation downstream.</p><p>Убедитесь, что SPA, callback URI и API-запросы видны браузеру на одном origin. Для Vite development используйте HTTPS dev proxy; PublicOrigin должен совпадать с адресом Vite.</p></details>
           </>}
           {step === 4 && <>
-            <p>Устанавливайте <code>X-CSRF: 1</code> для всех BFF data endpoints и проксируемых API, включая GET. Не добавляйте cross-origin CORS-доступ к session API. Переход на login и logout выполняйте навигацией браузера.</p>
+            <p>Устанавливайте <code>X-CSRF: 1</code> для всех BFF data endpoints и проксируемых API, включая GET. Не добавляйте cross-origin CORS-доступ к session API. Переход на login и logout выполняйте навигацией браузера. Стандартный returnUrl принимает локальный маршрут с query/fragment; внешние URL и повторяющиеся параметры отклоняются до начала login/logout.</p>
             <Code label="Login и чтение сессии" value={createSpaCode(setup.pathBase)} />
             <p>Sample использует официальный <code>@tanstack/react-query</code>, а не OAuth SDK для public SPA. В <code>src/session.ts</code> заданы focus/reconnect refetch, проверка каждые 60 секунд только при активной authenticated SPA и отключение автоматических retries. В фоне interval не работает; absolute session lifetime ограничен сервером.</p>
-            <Code label="Native POST logout с framework antiforgery token" value={`const response = await fetch("${targetRoutes.antiforgery}", {\n  credentials: "same-origin", headers: { "X-CSRF": "1" },\n});\nif (!response.ok) throw new Error(\`BFF returned \${response.status}\`);\nconst { requestToken, formFieldName } = await response.json();\nconst form = document.createElement("form");\nform.method = "POST";\nform.action = "${targetRoutes.logout}";\nconst field = document.createElement("input");\nfield.type = "hidden";\nfield.name = formFieldName;\nfield.value = requestToken;\nform.append(field);\ndocument.body.append(form);\nform.submit();`} />
+            <Code label="Native POST logout с framework antiforgery token" value={`const response = await fetch(${JSON.stringify(targetRoutes.antiforgery)}, {\n  credentials: "same-origin", headers: { "X-CSRF": "1" },\n});\nif (!response.ok) throw new Error(\`BFF returned \${response.status}\`);\nconst { requestToken, formFieldName } = await response.json();\nconst form = document.createElement("form");\nform.method = "POST";\nform.action = ${JSON.stringify(targetRoutes.logout)};\nconst field = document.createElement("input");\nfield.type = "hidden";\nfield.name = formFieldName;\nfield.value = requestToken;\nform.append(field);\ndocument.body.append(form);\nform.submit();`} />
             <p>Перед logout отменяйте текущие query и блокируйте новые UI-запросы. После 401 очищайте кэш пользователя и API. После 503 показывайте недоступность, без автоматического повтора POST/refresh или перенаправления в бесконечный login.</p>
             <p className="doc-note">HttpOnly скрывает cookie от JavaScript, но XSS всё ещё может выполнять запросы от имени пользователя. Хост SPA отвечает за CSP, безопасный DOM, зависимости, входные данные и отсутствие секретов в bundle/logs.</p>
           </>}

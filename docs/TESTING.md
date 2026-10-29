@@ -26,6 +26,7 @@ Concurrency barriers используют TaskCompletionSource и удержан
 | SpaBoundaryTests | Code/PKCE, cookie flags, server-only tokens, anonymous 401, CSRF/Origin rejection, stripping browser Bearer/Cookie и downstream Set-Cookie, ID token issuer/audience/nonce/lifetime/signature, смена session reference при повторном входе, фиксированный return URL |
 | RefreshLogoutTests | Две реплики/два multiplexers, 50 конкурентных запросов и один refresh; logout во время/после refresh; native antiforgery form без блокировки refresh; invalid_grant/429/5xx/malformed без retry; caller cancellation после redemption |
 | RefreshProtocolTests | Ошибочный refresh ID token, смена subject, optional ID/refresh tokens, expired pending marker, JWKS signing-key rollover, signed-and-encrypted ID tokens со стандартной расшифровкой |
+| SpaRoutingTests | Произвольные API пути/методы/query/body, SPA deep links и dotted paths, local returnUrl с query/hash, open-redirect/duplicate rejection, сохранение session при неверном logout target |
 | SpaHostingTests | Разные стандартные PathBase, prefixed callback URI, login/API/logout и возврат в корень SPA |
 | SessionBoundaryTests | Redis connection failure → 503 без proxy, namespace isolation, idle/absolute expiration без refresh, callback replay, GET/CSRF logout rejection |
 | OpenIddictFlowTests | Настоящий OpenIddict + PostgreSQL: authorization/PKCE/token/refresh/revocation/RP logout и HTTPS resource API с официальной validation; encrypted access tokens; scopes/roles API; confidential-client boundary и отсутствие provider session |

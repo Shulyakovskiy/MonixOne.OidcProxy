@@ -25,13 +25,13 @@ public partial class Program
 
         await using var app = builder.Build();
         app.Services.GetRequiredService<ConnectionMultiplexer>();
-        app.UsePathBase(builder.Configuration["PathBase"] ?? string.Empty);
+        app.UsePathBase(PathString.FromUriComponent(builder.Configuration["PathBase"] ?? string.Empty));
         if (!app.Environment.IsDevelopment()) app.UseHsts();
         app.UseHttpsRedirection();
         app.UseDefaultFiles();
         app.UseStaticFiles();
         app.UseOidcProxy();
-        app.MapFallbackToFile("index.html").AllowAnonymous();
+        app.MapFallbackToFile("{**path}", "index.html").AllowAnonymous();
         await app.RunAsync();
     }
 }

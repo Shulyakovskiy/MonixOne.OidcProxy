@@ -31,7 +31,7 @@ corepack pnpm docs:dev
 
 ### 1. Топология и клиент провайдера
 
-SPA и BFF должны иметь **один публичный HTTPS origin**, например `https://spa.example.com`. Resource API доступен BFF по HTTPS и самостоятельно валидирует access token. Login — обычная top-level навигация на `/.auth/login`.
+SPA и BFF должны иметь **один публичный HTTPS origin**, например `https://spa.example.com`. Resource API доступен BFF по HTTPS и самостоятельно валидирует access token. Login — обычная top-level навигация на `/.auth/login`. Параметр `returnUrl` принимает любой локальный URL, включая deep links, query и fragment; по умолчанию возвращает к корню приложения с PathBase. Logout поддерживает тот же параметр. Внешние URL, control characters и неоднозначные повторные параметры отклоняются с 400 до начала login/logout.
 
 У провайдера зарегистрируйте confidential web client с client secret, code/refresh grants, PKCE S256 и scopes `openid profile offline_access api.read` (последний — пример scope вашего API).
 
@@ -39,7 +39,7 @@ SPA и BFF должны иметь **один публичный HTTPS origin**,
 |---|---|
 | Redirect URI | `https://spa.example.com/.auth/login/callback` |
 | Post logout redirect URI | `https://spa.example.com/.auth/signout-callback` |
-| Return URL приложения | Корень приложения: `/` или `{PathBase}/` |
+| Return URL приложения | Локальный returnUrl; по умолчанию `/` или `{PathBase}/` |
 
 Для **OpenIddict** нужны authorization, token, end-session и revocation endpoint permissions, code/refresh grant permissions, response type `code` и permission для API scope. Сервер включает `AllowAuthorizationCodeFlow()`, `AllowRefreshTokenFlow()` и PKCE; login/consent, claim destinations и resource assignment принадлежат authorization server. См. [application permissions](https://documentation.openiddict.com/configuration/application-permissions.html) и [официальные guides](https://documentation.openiddict.com/guides/).
 
@@ -100,19 +100,19 @@ builder.Services.AddOidcProxy(bff =>
 
 var app = builder.Build();
 app.Services.GetRequiredService<ConnectionMultiplexer>();
-app.UsePathBase(builder.Configuration["PathBase"] ?? string.Empty);
+app.UsePathBase(PathString.FromUriComponent(builder.Configuration["PathBase"] ?? string.Empty));
 if (!app.Environment.IsDevelopment()) app.UseHsts();
 app.UseHttpsRedirection();
 app.UseDefaultFiles();
 app.UseStaticFiles();
 app.UseOidcProxy();
-app.MapFallbackToFile("index.html").AllowAnonymous();
+app.MapFallbackToFile("{**path}", "index.html").AllowAnonymous();
 app.Run();
 ```
 
 Для SPA под `/admin` задайте host configuration `PathBase=/admin` и Vite base `/admin/`. Ingress должен передавать префикс BFF без удаления. Callback URI становятся `/admin/.auth/login/callback` и `/admin/.auth/signout-callback`; возврат после login/logout — `/admin/`. Это штатный ASP.NET Core PathBase, отдельного BFF path option нет. Один BFF host использует одну confidential client registration; независимые SPA получают собственные host/configuration, Redis scope и origin.
 
-`UseOidcProxy()` подключает routing/authentication/authorization, BFF endpoints и `MapReverseProxy()`. Все proxy routes этого BFF требуют его сессию и CSRF header. Дополнительный `MapReverseProxy()` не нужен. Настройка путей и маршрутов — стандартный YARP configuration; пример сохраняет `/api/…` без преобразования.
+`UseOidcProxy()` подключает routing/authentication/authorization, BFF endpoints и `MapReverseProxy()`. Все proxy routes этого BFF требуют его сессию и CSRF header. Имена `/api`, `/graphql` или любые другие шаблоны задаются YARP configuration; в пакете нет списка разрешённых application paths. SPA fallback в примере имеет pattern `{**path}`, включая пути с точками; API routes имеют собственный более высокий приоритет. Дополнительный `MapReverseProxy()` не нужен. Настройка путей и маршрутов — стандартный YARP configuration; пример сохраняет `/api/…` без преобразования.
 
 На ingress настройте ForwardedHeaders **до** HTTPS redirect/BFF и доверяйте только своим proxies/networks. PublicOrigin всегда указывает внешний origin браузера. Не отключайте проверку TLS downstream.
 
@@ -150,7 +150,7 @@ Logout: отменить UI query, получить `/.auth/antiforgery` с `X-C
 
 | Endpoint | Назначение |
 |---|---|
-| `GET /.auth/login` | OIDC challenge, return к корню приложения с PathBase |
+| `GET /.auth/login` | OIDC challenge, локальный returnUrl или корень приложения |
 | `GET /.auth/login/callback` | Framework state/correlation/nonce validation и обмен code |
 | `GET /.auth/me` | Claims сессии, без токенов; cookie + `X-CSRF: 1` |
 | `GET /.auth/antiforgery` | Framework token для logout form; cookie + `X-CSRF: 1` |

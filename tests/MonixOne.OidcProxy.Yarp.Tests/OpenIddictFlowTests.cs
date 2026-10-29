@@ -62,9 +62,11 @@ public sealed class OpenIddictFlowTests(InfrastructureFixture infrastructure, Op
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Logout_RealOpenIddict_CompletesRpLogoutAndEndsTheBffSession(bool nativeForm)
+    [InlineData(false, null)]
+    [InlineData(true, null)]
+    [InlineData(false, "/signed-out/complete?from=app#done")]
+    [InlineData(true, "/signed-out/complete?from=app#done")]
+    public async Task Logout_RealOpenIddict_CompletesRpLogoutAndEndsTheBffSession(bool nativeForm, string? returnUrl)
     {
         // Arrange
         var ct = TestContext.Current.CancellationToken;
@@ -76,7 +78,7 @@ public sealed class OpenIddictFlowTests(InfrastructureFixture infrastructure, Op
         using var login = await browser.LoginAsync(identityBrowser);
 
         // Act
-        using var logout = await browser.LogoutAsync(nativeForm, ct);
+        using var logout = await browser.LogoutAsync(nativeForm, ct, returnUrl: returnUrl);
         using var remote = await identityBrowser.GetAsync(logout.Headers.Location, ct);
         using var callback = await browser.GetAsync(remote.Headers.Location!.PathAndQuery, ct);
         using var after = await browser.ApiAsync(cancellationToken: ct);
@@ -87,7 +89,7 @@ public sealed class OpenIddictFlowTests(InfrastructureFixture infrastructure, Op
         logout.StatusCode.ShouldBe(HttpStatusCode.Redirect);
         remote.StatusCode.ShouldBe(HttpStatusCode.Redirect);
         callback.StatusCode.ShouldBe(HttpStatusCode.Redirect);
-        callback.Headers.Location!.OriginalString.ShouldBe("/");
+        callback.Headers.Location!.OriginalString.ShouldBe(returnUrl ?? "/");
         after.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
     }
 

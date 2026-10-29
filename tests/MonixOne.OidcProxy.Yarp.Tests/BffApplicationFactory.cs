@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using StackExchange.Redis;
@@ -28,11 +29,14 @@ public sealed class BffApplicationFactory(InfrastructureFixture infrastructure, 
     public string KeyNamespace { get; } = keyNamespace ?? Guid.NewGuid().ToString("N");
     public Action<OpenIdConnectOptions>? ConfigureOidc { get; set; }
     public string PathBase { get; set; } = string.Empty;
+    public string ProxyPath { get; set; } = "/api/{**all}";
+    public string? WebRoot { get; set; }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Testing");
         builder.UseSetting("PathBase", PathBase);
+        if (WebRoot is not null) builder.UseWebRoot(WebRoot);
         builder.ConfigureServices(services =>
         {
             services.RemoveAll<ConnectionMultiplexer>();
@@ -63,7 +67,7 @@ public sealed class BffApplicationFactory(InfrastructureFixture infrastructure, 
             services.Configure<CookieAuthenticationOptions>(OidcProxyDefaults.CookieScheme, options => options.TimeProvider = Clock);
             services.RemoveAll<IProxyConfigProvider>();
             services.AddSingleton<IProxyConfigProvider>(new InMemoryConfigProvider(
-                [new RouteConfig { RouteId = "api", ClusterId = "api", Match = new() { Path = "/api/{**all}" } }],
+                [new RouteConfig { RouteId = "api", ClusterId = "api", Match = new() { Path = ProxyPath } }],
                 [new ClusterConfig { ClusterId = "api", Destinations = new Dictionary<string, DestinationConfig>
                     { ["primary"] = new() { Address = backend.AbsoluteUri } } }]));
             services.RemoveAll<IForwarderHttpClientFactory>();
@@ -115,9 +119,11 @@ internal static class BrowserRequests
         return await browser.SendAsync(request, cancellationToken);
     }
 
-    internal static async Task<HttpResponseMessage> LoginAsync(this HttpClient browser, HttpClient identity, string pathBase = "")
+    internal static async Task<HttpResponseMessage> LoginAsync(this HttpClient browser, HttpClient identity, string pathBase = "", string? returnUrl = null)
     {
-        var start = await browser.GetAsync(pathBase + OidcProxyRoutes.Login);
+        var path = pathBase + OidcProxyRoutes.Login;
+        if (returnUrl is not null) path = QueryHelpers.AddQueryString(path, "returnUrl", returnUrl);
+        var start = await browser.GetAsync(path);
         if (start.StatusCode != HttpStatusCode.Redirect) return start;
         using var started = start;
         using var authorize = await identity.GetAsync(start.Headers.Location);
@@ -127,9 +133,11 @@ internal static class BrowserRequests
     }
 
     internal static async Task<HttpResponseMessage> LogoutAsync(this HttpClient browser, bool nativeForm = false,
-        CancellationToken cancellationToken = default, string pathBase = "")
+        CancellationToken cancellationToken = default, string pathBase = "", string? returnUrl = null)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Post, pathBase + OidcProxyRoutes.Logout);
+        var path = pathBase + OidcProxyRoutes.Logout;
+        if (returnUrl is not null) path = QueryHelpers.AddQueryString(path, "returnUrl", returnUrl);
+        using var request = new HttpRequestMessage(HttpMethod.Post, path);
         if (nativeForm)
         {
             using var response = await browser.ApiAsync(pathBase + OidcProxyRoutes.Antiforgery, cancellationToken);

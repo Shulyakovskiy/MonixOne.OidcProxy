@@ -9,6 +9,7 @@ public sealed class SpaHostingTests(InfrastructureFixture infrastructure)
     [Theory]
     [InlineData("/admin")]
     [InlineData("/workspace/portal")]
+    [InlineData("/client%20area")]
     public async Task LoginApiAndLogout_HostUsesPathBase_KeepCallbacksAndNavigationInsideTheSpa(string pathBase)
     {
         // Arrange

@@ -53,8 +53,8 @@ Node `BrowserSessions`, `BrowserIdentity`, session controllers, cookie, credenti
 
 ## Что уже проверено
 
-- Пакет: 51 тест на native MTP; реальные HTTP OIDC/YARP/Redis сценарии, rotating refresh, ошибки/таймауты, logout, JWE ID/access tokens и JWKS rollover. Native MTP/xUnit runner выполняет тесты; актуальные команды и состав — [TESTING.md](TESTING.md).
-- Текущий BR.Identity: 22 OpenIddict integration tests и 16 AuthorizationCodePkce integration tests прошли на его настоящем application pipeline с disposable PostgreSQL/Redis. Исходники сервиса не менялись.
+- Пакет: 70 тестов на native MTP; реальные HTTP OIDC/YARP/Redis сценарии, rotating refresh, ошибки/таймауты, logout, JWE ID/access tokens и JWKS rollover. Native MTP/xUnit runner выполняет тесты; актуальные команды и состав — [TESTING.md](TESTING.md).
+- Текущий BR.Identity: 22 OpenIddict, 16 AuthorizationCodePkce и 11 resource-server/YARP integration tests прошли на его настоящем application pipeline с disposable PostgreSQL/Redis. Исходники сервиса не менялись.
 - Текущий BR.Admin-Identity: 131 frontend/Vite tests, TypeScript typecheck и 17 browser-session/Identity server tests прошли. Server tests использовали отдельную временную БД `calendar_compat_test`; исходники приложения не менялись.
 
 **Не выполнен** сквозной browser login новой SPA через новый confidential client в фактическом окружении BR.Identity, поскольку регистрация/tenant/login-origin/ingress ещё не подготовлены. Не проверены real-user OTP/passkey, удаление Node BFF, миграция пользователей/cookie и работа всех Calendar/Identity операций после перехода. Полная совместимость и готовность к публикации пока не подтверждены.

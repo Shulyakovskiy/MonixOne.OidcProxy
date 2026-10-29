@@ -29,7 +29,7 @@ jobs:
       - name: Build
         run: dotnet build MonixOne.OidcProxy.Yarp.sln -c Release --no-restore --disable-build-servers -m:1 -p:GeneratePackageOnBuild=false
       - name: Verify package behavior
-        run: dotnet test --project tests/MonixOne.OidcProxy.Yarp.Tests/MonixOne.OidcProxy.Yarp.Tests.csproj -c Release --no-build --no-restore -- --minimum-expected-tests 51 --no-ansi --progress off
+        run: dotnet test --project tests/MonixOne.OidcProxy.Yarp.Tests/MonixOne.OidcProxy.Yarp.Tests.csproj -c Release --no-build --no-restore -- --minimum-expected-tests 70 --no-ansi --progress off
       - name: Pack
         run: dotnet pack src/MonixOne.OidcProxy.Yarp/MonixOne.OidcProxy.Yarp.csproj -c Release --no-build -o artifacts/nuget
       - name: Authenticate using NuGet trusted publishing
