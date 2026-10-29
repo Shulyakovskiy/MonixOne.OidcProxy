@@ -27,10 +27,12 @@ public sealed class BffApplicationFactory(InfrastructureFixture infrastructure, 
     public ManualClock Clock { get; } = new();
     public string KeyNamespace { get; } = keyNamespace ?? Guid.NewGuid().ToString("N");
     public Action<OpenIdConnectOptions>? ConfigureOidc { get; set; }
+    public string PathBase { get; set; } = string.Empty;
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Testing");
+        builder.UseSetting("PathBase", PathBase);
         builder.ConfigureServices(services =>
         {
             services.RemoveAll<ConnectionMultiplexer>();
@@ -113,9 +115,9 @@ internal static class BrowserRequests
         return await browser.SendAsync(request, cancellationToken);
     }
 
-    internal static async Task<HttpResponseMessage> LoginAsync(this HttpClient browser, HttpClient identity)
+    internal static async Task<HttpResponseMessage> LoginAsync(this HttpClient browser, HttpClient identity, string pathBase = "")
     {
-        var start = await browser.GetAsync("/.auth/login");
+        var start = await browser.GetAsync(pathBase + OidcProxyRoutes.Login);
         if (start.StatusCode != HttpStatusCode.Redirect) return start;
         using var started = start;
         using var authorize = await identity.GetAsync(start.Headers.Location);
@@ -125,12 +127,12 @@ internal static class BrowserRequests
     }
 
     internal static async Task<HttpResponseMessage> LogoutAsync(this HttpClient browser, bool nativeForm = false,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, string pathBase = "")
     {
-        using var request = new HttpRequestMessage(HttpMethod.Post, "/.auth/end-session");
+        using var request = new HttpRequestMessage(HttpMethod.Post, pathBase + OidcProxyRoutes.Logout);
         if (nativeForm)
         {
-            using var response = await browser.ApiAsync("/.auth/antiforgery", cancellationToken);
+            using var response = await browser.ApiAsync(pathBase + OidcProxyRoutes.Antiforgery, cancellationToken);
             var tokens = await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken);
             request.Content = new FormUrlEncodedContent(new Dictionary<string, string>
             {

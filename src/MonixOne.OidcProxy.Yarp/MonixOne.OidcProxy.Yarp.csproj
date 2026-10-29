@@ -16,8 +16,8 @@
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
-    <RepositoryUrl>https://github.com/Shulyakovskiy/MonixOne.OidcProxy</RepositoryUrl>
-    <PackageProjectUrl>https://github.com/Shulyakovskiy/MonixOne.OidcProxy</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/Shulyakovskiy/MonixOne.OidcProxy.Yarp</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/Shulyakovskiy/MonixOne.OidcProxy.Yarp</PackageProjectUrl>
     <PackageLicenseExpression>LGPL-3.0-only</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageReleaseNotes>YARP-based SPA BFF with standard OIDC, Redis sessions and atomic refresh/logout. See README.md.</PackageReleaseNotes>

@@ -1,10 +1,16 @@
 # MonixOne.OidcProxy.Yarp
 
-[![CI](https://github.com/Shulyakovskiy/MonixOne.OidcProxy/actions/workflows/ci.yml/badge.svg)](https://github.com/Shulyakovskiy/MonixOne.OidcProxy/actions/workflows/ci.yml)
+[![CI](https://github.com/Shulyakovskiy/MonixOne.OidcProxy.Yarp/actions/workflows/ci.yml/badge.svg)](https://github.com/Shulyakovskiy/MonixOne.OidcProxy.Yarp/actions/workflows/ci.yml)
 
 BFF для SPA на **.NET 10 LTS**, ASP.NET Core OpenID Connect, **YARP** и Redis. Один NuGet-пакет `MonixOne.OidcProxy.Yarp`: browser получает HttpOnly session cookie, OAuth-токены остаются на сервере. Поддерживается стандартный confidential Authorization Code + PKCE flow, включая OpenIddict.
 
 Репозиторий основан на [OidcProxy.Net](https://github.com/oidcproxydotnet/OidcProxy.Net). Лицензия **LGPL-3.0-only** и upstream copyright сохранены. Сервисов приложения, authorization server или UI входа пакет не реализует.
+
+## Текущее состояние
+
+Пакет **не опубликован**. Подготовка и проверки ведутся в этом репозитории; автоматический publish после merge отключён. BR.Admin-Identity и BR.Identity в рамках этой работы не изменялись. Цель подключения — удалить Node BFF и использовать один общий OIDC/YARP BFF, без BR-specific коннекторов.
+
+Проверенные контракты и условия до переключения потребителя — [BR.Admin-Identity](docs/BR-ADMIN-IDENTITY.md). Перенос настроек эталонного пакета — [PACKAGE-SETTINGS.md](docs/PACKAGE-SETTINGS.md).
 
 ## Интерактивное руководство для SPA
 
@@ -33,7 +39,7 @@ SPA и BFF должны иметь **один публичный HTTPS origin**,
 |---|---|
 | Redirect URI | `https://spa.example.com/.auth/login/callback` |
 | Post logout redirect URI | `https://spa.example.com/.auth/signout-callback` |
-| Return URL приложения | `/`, фиксирован пакетом |
+| Return URL приложения | Корень приложения: `/` или `{PathBase}/` |
 
 Для **OpenIddict** нужны authorization, token, end-session и revocation endpoint permissions, code/refresh grant permissions, response type `code` и permission для API scope. Сервер включает `AllowAuthorizationCodeFlow()`, `AllowRefreshTokenFlow()` и PKCE; login/consent, claim destinations и resource assignment принадлежат authorization server. См. [application permissions](https://documentation.openiddict.com/configuration/application-permissions.html) и [официальные guides](https://documentation.openiddict.com/guides/).
 
@@ -42,10 +48,10 @@ Encrypted access tokens OpenIddict передаются без разбора. A
 ### 2. Пакет и конфигурация
 
 ```sh
-dotnet add package MonixOne.OidcProxy.Yarp --version 6.0.0
+dotnet pack src/MonixOne.OidcProxy.Yarp/MonixOne.OidcProxy.Yarp.csproj -c Release -o artifacts/nuget
 ```
 
-До первой публикации используйте ProjectReference из этого репозитория или локальный feed из `dotnet pack`. Все версии зависимостей репозитория централизованы в `Directory.Packages.props`.
+Эта команда создаёт локальные nupkg/snupkg. Для подключения сейчас используйте ProjectReference из этого репозитория или полученный локальный feed. Команды установки из nuget.org пока нет. Все версии зависимостей репозитория централизованы в `Directory.Packages.props`.
 
 ```json
 {
@@ -94,6 +100,7 @@ builder.Services.AddOidcProxy(bff =>
 
 var app = builder.Build();
 app.Services.GetRequiredService<ConnectionMultiplexer>();
+app.UsePathBase(builder.Configuration["PathBase"] ?? string.Empty);
 if (!app.Environment.IsDevelopment()) app.UseHsts();
 app.UseHttpsRedirection();
 app.UseDefaultFiles();
@@ -102,6 +109,8 @@ app.UseOidcProxy();
 app.MapFallbackToFile("index.html").AllowAnonymous();
 app.Run();
 ```
+
+Для SPA под `/admin` задайте host configuration `PathBase=/admin` и Vite base `/admin/`. Ingress должен передавать префикс BFF без удаления. Callback URI становятся `/admin/.auth/login/callback` и `/admin/.auth/signout-callback`; возврат после login/logout — `/admin/`. Это штатный ASP.NET Core PathBase, отдельного BFF path option нет. Один BFF host использует одну confidential client registration; независимые SPA получают собственные host/configuration, Redis scope и origin.
 
 `UseOidcProxy()` подключает routing/authentication/authorization, BFF endpoints и `MapReverseProxy()`. Все proxy routes этого BFF требуют его сессию и CSRF header. Дополнительный `MapReverseProxy()` не нужен. Настройка путей и маршрутов — стандартный YARP configuration; пример сохраняет `/api/…` без преобразования.
 
@@ -141,7 +150,7 @@ Logout: отменить UI query, получить `/.auth/antiforgery` с `X-C
 
 | Endpoint | Назначение |
 |---|---|
-| `GET /.auth/login` | OIDC challenge, фиксированный return `/` |
+| `GET /.auth/login` | OIDC challenge, return к корню приложения с PathBase |
 | `GET /.auth/login/callback` | Framework state/correlation/nonce validation и обмен code |
 | `GET /.auth/me` | Claims сессии, без токенов; cookie + `X-CSRF: 1` |
 | `GET /.auth/antiforgery` | Framework token для logout form; cookie + `X-CSRF: 1` |
@@ -180,11 +189,11 @@ Public API и namespace: `MonixOne.OidcProxy.Yarp`; `ProxyOptions`, `OidcProxyDe
 ```sh
 dotnet restore MonixOne.OidcProxy.Yarp.sln
 dotnet build MonixOne.OidcProxy.Yarp.sln -c Release --no-restore -p:GeneratePackageOnBuild=false
-dotnet test MonixOne.OidcProxy.Yarp.sln -c Release --no-build
-dotnet pack src/MonixOne.OidcProxy.Yarp/MonixOne.OidcProxy.Yarp.csproj -c Release --no-build -o artifacts/packages
+dotnet test --project tests/MonixOne.OidcProxy.Yarp.Tests/MonixOne.OidcProxy.Yarp.Tests.csproj -c Release --no-build
+dotnet pack src/MonixOne.OidcProxy.Yarp/MonixOne.OidcProxy.Yarp.csproj -c Release --no-build -o artifacts/nuget
 ```
 
-CI проверяет пакет, HTTP/concurrency/OpenIddict тесты, SPA и документацию. Workflow публикации запускается после merge PR в main через environment `production`, NuGet trusted publishing и `NuGet/login`, с `NUGET_USER` в secrets. Создайте trusted publisher в NuGet для этого репозитория/workflow/environment; настройка другого репозитория не переносится автоматически. Публикация версии необратима: повышайте Version перед следующим релизом.
+CI проверяет пакет, HTTP/concurrency/OpenIddict тесты, SPA и документацию. Workflow `.github/workflows/publish.yml` имеет только ручной `workflow_dispatch` для main и использует environment `production`, NuGet trusted publishing и `NuGet/login`. Автоматического запуска после merge нет. Публикация не запускалась; до завершения проверки BR.Admin-Identity её выполнять нельзя. `NUGET_USER` в production уже присутствует; значение не читалось. Создайте trusted publisher в NuGet для этого репозитория/workflow/environment; настройка другого репозитория не переносится автоматически. Публикация версии необратима: повышайте Version перед следующим релизом.
 
 ### Upstream security issue
 

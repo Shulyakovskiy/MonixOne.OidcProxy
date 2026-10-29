@@ -3,6 +3,8 @@
     <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
+    <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
   </PropertyGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
@@ -21,7 +23,6 @@
     <PackageReference Include="Microsoft.EntityFrameworkCore" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
-    <PackageReference Include="coverlet.collector" PrivateAssets="all" />
     <ProjectReference Include="../../src/MonixOne.OidcProxy.Yarp/MonixOne.OidcProxy.Yarp.csproj" />
     <ProjectReference Include="../../samples/MonixOne.OidcProxy.Yarp.SampleHost/MonixOne.OidcProxy.Yarp.SampleHost.csproj" />
   </ItemGroup>

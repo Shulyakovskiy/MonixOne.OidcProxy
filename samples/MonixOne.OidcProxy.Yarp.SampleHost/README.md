@@ -50,6 +50,10 @@ corepack pnpm dev
 
 В этом режиме PublicOrigin и оба зарегистрированных callback URI должны использовать порт **5173**, поскольку браузер работает через Vite. Proxy сохраняет origin и направляет `/.auth` и `/api` на BFF. Секреты не передавайте через `VITE_*`.
 
+## SPA под путём
+
+Стандартный `PathBase` задаётся в host configuration. Например, для `/admin` соберите `corepack pnpm build --base /admin/`, задайте `PathBase=/admin` хосту и включите тот же префикс в зарегистрированные callback URI. Клиент берёт base из Vite BASE_URL. Ingress должен передавать префикс до BFF; удаление префикса gateway требует отдельной корректной настройки до переключения.
+
 ## Что делает клиент
 
 `src/routes.ts` содержит browser routes. `src/bff.ts` реализует same-origin fetch с `X-CSRF: 1`, чтение claims и native POST logout с ASP.NET antiforgery token. `src/session.ts` использует официальный `@tanstack/react-query`: focus/reconnect refetch и authenticated polling раз в 60 секунд в видимой вкладке, без автоматических retries. В фоне polling отключён; absolute lifetime ограничивает сервер.

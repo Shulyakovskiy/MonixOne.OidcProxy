@@ -123,12 +123,14 @@ internal static class OidcAuthentication
         oidc.Events.OnRedirectToIdentityProvider = async context =>
         {
             await redirect(context);
-            context.ProtocolMessage.RedirectUri = new Uri(options.PublicOrigin!, OidcProxyRoutes.LoginCallback).AbsoluteUri;
+            context.ProtocolMessage.RedirectUri = new Uri(options.PublicOrigin!,
+                context.Request.PathBase.Add(OidcProxyRoutes.LoginCallback).ToString()).AbsoluteUri;
         };
         oidc.Events.OnRedirectToIdentityProviderForSignOut = context =>
         {
             context.ProtocolMessage.ClientId = oidc.ClientId;
-            context.ProtocolMessage.PostLogoutRedirectUri = new Uri(options.PublicOrigin!, oidc.SignedOutCallbackPath).AbsoluteUri;
+            context.ProtocolMessage.PostLogoutRedirectUri = new Uri(options.PublicOrigin!,
+                context.Request.PathBase.Add(oidc.SignedOutCallbackPath).ToString()).AbsoluteUri;
             context.ProtocolMessage.IdTokenHint = context.HttpContext.Items[BffConstants.LogoutIdTokenItem] as string;
             return Task.CompletedTask;
         };

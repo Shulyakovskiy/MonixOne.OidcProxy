@@ -42,6 +42,7 @@ internal sealed class OidcWireMock : IDisposable
     internal string LastAccessToken = string.Empty;
     internal string LastRefreshToken = string.Empty;
     internal TaskCompletionSource RefreshStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    internal TaskCompletionSource RevocationCompleted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     internal TaskCompletionSource? ReleaseRefresh { get; set; }
     internal ConcurrentQueue<string> RevokedTokens { get; } = new();
     internal ConcurrentQueue<IRequestMessage> BackendRequests { get; } = new();
@@ -95,6 +96,7 @@ internal sealed class OidcWireMock : IDisposable
             var token = QueryHelpers.ParseQuery(request.Body ?? string.Empty)["token"].ToString();
             RevokedTokens.Enqueue(token);
             _refreshTokens.TryRemove(token, out _);
+            RevocationCompleted.TrySetResult();
             return Json(new { });
         }));
         Server.Given(Request.Create().WithPath("/api/*")).RespondWith(Response.Create().WithCallback(request =>

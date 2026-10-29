@@ -8,13 +8,13 @@
 
 ```sh
 dotnet restore MonixOne.OidcProxy.Yarp.sln
-dotnet test MonixOne.OidcProxy.Yarp.sln -c Release -p:GeneratePackageOnBuild=false --logger trx
+dotnet test --project tests/MonixOne.OidcProxy.Yarp.Tests/MonixOne.OidcProxy.Yarp.Tests.csproj -c Release -p:GeneratePackageOnBuild=false
 ```
 
 Повтор значимых гонок и совместимости:
 
 ```sh
-dotnet test tests/MonixOne.OidcProxy.Yarp.Tests/MonixOne.OidcProxy.Yarp.Tests.csproj -c Release --no-build --filter 'FullyQualifiedName~RefreshLogoutTests|FullyQualifiedName~RefreshProtocolTests|FullyQualifiedName~OpenIddictFlowTests'
+dotnet test --project tests/MonixOne.OidcProxy.Yarp.Tests/MonixOne.OidcProxy.Yarp.Tests.csproj -c Release --no-build -- --filter-class 'MonixOne.OidcProxy.Yarp.Tests.Refresh*' --minimum-expected-tests 22
 ```
 
 Concurrency barriers используют TaskCompletionSource и удержание настоящего HTTP-ответа после выпуска rotating refresh token. Session time двигается TimeProvider; тесты не используют sleep для ожидания гонки. Таймауты ограничивают зависшие проверки, а не заменяют синхронизацию.
@@ -26,6 +26,7 @@ Concurrency barriers используют TaskCompletionSource и удержан
 | SpaBoundaryTests | Code/PKCE, cookie flags, server-only tokens, anonymous 401, CSRF/Origin rejection, stripping browser Bearer/Cookie и downstream Set-Cookie, ID token issuer/audience/nonce/lifetime/signature, смена session reference при повторном входе, фиксированный return URL |
 | RefreshLogoutTests | Две реплики/два multiplexers, 50 конкурентных запросов и один refresh; logout во время/после refresh; native antiforgery form без блокировки refresh; invalid_grant/429/5xx/malformed без retry; caller cancellation после redemption |
 | RefreshProtocolTests | Ошибочный refresh ID token, смена subject, optional ID/refresh tokens, expired pending marker, JWKS signing-key rollover, signed-and-encrypted ID tokens со стандартной расшифровкой |
+| SpaHostingTests | Разные стандартные PathBase, prefixed callback URI, login/API/logout и возврат в корень SPA |
 | SessionBoundaryTests | Redis connection failure → 503 без proxy, namespace isolation, idle/absolute expiration без refresh, callback replay, GET/CSRF logout rejection |
 | OpenIddictFlowTests | Настоящий OpenIddict + PostgreSQL: authorization/PKCE/token/refresh/revocation/RP logout и HTTPS resource API с официальной validation; encrypted access tokens; scopes/roles API; confidential-client boundary и отсутствие provider session |
 
@@ -50,7 +51,7 @@ Vitest/Testing Library проверяют HTTP-контракт клиента, 
 ```sh
 dotnet format style MonixOne.OidcProxy.Yarp.sln --diagnostics IDE0005 --verify-no-changes
 dotnet list MonixOne.OidcProxy.Yarp.sln package --vulnerable --include-transitive
-dotnet pack src/MonixOne.OidcProxy.Yarp/MonixOne.OidcProxy.Yarp.csproj -c Release --no-build -o artifacts/packages
+dotnet pack src/MonixOne.OidcProxy.Yarp/MonixOne.OidcProxy.Yarp.csproj -c Release --no-build -o artifacts/nuget
 ```
 
 Проверьте .nupkg и .snupkg: один package ID MonixOne.OidcProxy.Yarp, net10.0, LGPL-3.0-only, README, PNG icon, source repository metadata, XML API docs, отсутствие test/provider connector dependencies. Audit отражает известные advisory feeds на момент запуска и не доказывает отсутствие неизвестных CVE. Статус upstream #373 описан в корневом README.

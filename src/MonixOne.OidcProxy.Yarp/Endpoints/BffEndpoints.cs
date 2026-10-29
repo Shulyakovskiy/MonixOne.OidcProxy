@@ -14,7 +14,10 @@ internal static class BffEndpoints
     {
         app.MapGet(OidcProxyRoutes.Login, async (HttpContext context) =>
         {
-            var properties = new AuthenticationProperties { RedirectUri = OidcProxyRoutes.ApplicationRoot };
+            var properties = new AuthenticationProperties
+            {
+                RedirectUri = context.Request.PathBase.Add(OidcProxyRoutes.ApplicationRoot).ToString()
+            };
             var previous = await context.AuthenticateAsync(OidcProxyDefaults.CookieScheme);
             if (context.Items.ContainsKey(typeof(SessionUnavailableException)))
                 return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
@@ -57,7 +60,10 @@ internal static class BffEndpoints
                 context.Items[BffConstants.LogoutIdTokenItem] = ticket.Properties.GetTokenValue("id_token");
                 await tokens.RevokeAsync(ticket, CancellationToken.None);
             }
-            return Results.SignOut(new AuthenticationProperties { RedirectUri = OidcProxyRoutes.ApplicationRoot }, [OidcProxyDefaults.OpenIdConnectScheme]);
+            return Results.SignOut(new AuthenticationProperties
+            {
+                RedirectUri = context.Request.PathBase.Add(OidcProxyRoutes.ApplicationRoot).ToString()
+            }, [OidcProxyDefaults.OpenIdConnectScheme]);
         }).RequireAuthorization(BffConstants.AuthorizationPolicy).WithMetadata(BffConstants.ApiMetadata);
 
     }

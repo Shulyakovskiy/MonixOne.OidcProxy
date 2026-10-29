@@ -6,6 +6,45 @@ namespace MonixOne.OidcProxy.Yarp.Tests;
 public sealed class RefreshLogoutTests(InfrastructureFixture infrastructure)
 {
     [Fact]
+    public async Task Refresh_RedisUnavailableAfterRedemption_RevokesNewTokenAndInvalidatesOnRecovery()
+    {
+        // Arrange
+        var ct = TestContext.Current.CancellationToken;
+        using var identity = new OidcWireMock(infrastructure)
+        { ReleaseRefresh = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+        await using var host = identity.CreateBff();
+        using var browser = host.CreateBrowser();
+        using var identityBrowser = identity.CreateIdentityBrowser();
+        using var login = await browser.LoginAsync(identityBrowser);
+        host.Clock.Advance(TimeSpan.FromSeconds(100));
+        var owner = browser.ApiAsync(cancellationToken: ct);
+        await identity.RefreshStarted.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
+
+        // Act: fail persistence after the provider has consumed the rotating token.
+        await infrastructure.Redis.PauseAsync(ct);
+        try
+        {
+            identity.ReleaseRefresh.SetResult();
+            await identity.RevocationCompleted.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
+        }
+        finally
+        {
+            // Shared-container cleanup must run after test cancellation too.
+            await infrastructure.Redis.UnpauseAsync(CancellationToken.None);
+        }
+        using var failed = await owner;
+        using var recovered = await browser.ApiAsync(cancellationToken: ct).WaitAsync(TimeSpan.FromSeconds(5), ct);
+
+        // Assert
+        login.StatusCode.ShouldBe(HttpStatusCode.Redirect);
+        failed.StatusCode.ShouldBe(HttpStatusCode.ServiceUnavailable);
+        recovered.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
+        identity.RefreshRequests.ShouldBe(1);
+        identity.ActiveRefreshTokens.ShouldBe(0);
+        identity.BackendRequests.ShouldBeEmpty();
+    }
+
+    [Fact]
     public async Task Refresh_TwoReplicasAndConcurrentRequests_RedeemsTheRefreshTokenOnce()
     {
         // Arrange

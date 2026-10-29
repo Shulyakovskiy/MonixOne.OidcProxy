@@ -86,9 +86,9 @@ internal sealed class TokenSession(SessionStore store, ProxyOptions options,
             }
             catch (Exception e)
             {
-                await InvalidateOperationAsync(id, operation);
+                await InvalidateAsync(id);
                 await RevokeAsync(ticket, CancellationToken.None);
-                logger.LogWarning("BFF refresh failed; server session invalidated. Failure type: {FailureType}", e.GetType().Name);
+                logger.LogWarning("BFF refresh failed; session cleanup requested. Failure type: {FailureType}", e.GetType().Name);
                 if (e is ReauthenticationRequiredException) return null;
                 throw new SessionUnavailableException("The identity provider could not complete token refresh.", e);
             }
@@ -116,7 +116,7 @@ internal sealed class TokenSession(SessionStore store, ProxyOptions options,
             }
             catch (Exception e)
             {
-                await InvalidateOperationAsync(id, operation);
+                await InvalidateAsync(id);
                 await RevokeAsync(updated, CancellationToken.None);
                 throw new SessionUnavailableException("Unable to persist the rotated tokens.", e);
             }
@@ -235,19 +235,21 @@ internal sealed class TokenSession(SessionStore store, ProxyOptions options,
         }
     }
 
-    private async Task InvalidateOperationAsync(string id, string operation)
+    private async Task InvalidateAsync(string id)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         try
         {
-            var latest = await store.ReadAsync(id, timeout.Token);
-            if (latest?.State.RefreshOperation == operation)
-                await store.CompareExchangeAsync(latest, null, timeout.Token);
+            // Session IDs are never reused. Delete directly: a failed read must not
+            // prevent cleanup, and an unacknowledged completion may have cleared the
+            // pending marker already. In either case this logical session must end.
+            await store.RemoveAsync(id, timeout.Token);
         }
         catch (Exception e)
         {
-            // The persisted pending marker still prevents re-use of the old refresh token.
-            logger.LogError("Unable to invalidate pending BFF refresh. Failure type: {FailureType}", e.GetType().Name);
+            // Redis did not confirm cleanup. Report the failure; the record
+            // remains bounded by its stored lifetimes and any pending deadline.
+            logger.LogError("Unable to invalidate BFF session after refresh failure. Failure type: {FailureType}", e.GetType().Name);
         }
     }
 

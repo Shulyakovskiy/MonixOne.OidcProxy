@@ -1,7 +1,8 @@
-import { routes } from "./routes";
+import { createRoutes } from "./routes";
 
 export const initialSetup = {
   origin: "https://spa.example.com",
+  pathBase: "",
   authority: "https://identity.example.com",
   clientId: "spa-bff",
   api: "https://api.example.com/",
@@ -31,6 +32,9 @@ export function validateSetup(setup: Setup): string[] {
     if (!/^[a-zA-Z0-9._-]{1,64}$/.test(setup[field]))
       errors.push(`${field}: 1–64 символа ASCII, буквы, цифры, точка, дефис или подчёркивание.`);
   }
+  if (setup.pathBase && (!/^\/[a-zA-Z0-9._~-]+(?:\/[a-zA-Z0-9._~-]+)*$/.test(setup.pathBase) ||
+      setup.pathBase.split("/").some(segment => segment === "." || segment === "..")))
+    errors.push("PathBase: пустая строка для корня или абсолютный ASCII путь без trailing slash и dot segments.");
   if (!setup.clientId.trim()) errors.push("Client ID обязателен.");
   const scopes = setup.scopes.trim().split(/\s+/);
   if (!scopes.includes("openid")) errors.push("Добавьте scope openid.");
@@ -40,6 +44,7 @@ export function validateSetup(setup: Setup): string[] {
 
 export function createConfiguration(setup: Setup): string {
   return JSON.stringify({
+    PathBase: setup.pathBase,
     Bff: {
       PublicOrigin: new URL(setup.origin).origin,
       ApplicationName: setup.application,
@@ -76,6 +81,7 @@ builder.Services.AddOidcProxy(bff =>
 
 var app = builder.Build();
 app.Services.GetRequiredService<ConnectionMultiplexer>();
+app.UsePathBase(builder.Configuration["PathBase"] ?? string.Empty);
 if (!app.Environment.IsDevelopment()) app.UseHsts();
 app.UseHttpsRedirection();
 app.UseDefaultFiles();
@@ -84,7 +90,9 @@ app.UseOidcProxy();
 app.MapFallbackToFile("index.html").AllowAnonymous();
 app.Run();`;
 
-export const spaCode = `// Login is a top-level browser navigation, never fetch().
+export function createSpaCode(pathBase: string) {
+  const routes = createRoutes(pathBase);
+  return `// Login is a top-level browser navigation, never fetch().
 window.location.assign("${routes.login}");
 
 // Only the same-origin BFF receives the session cookie.
@@ -100,15 +108,16 @@ if (response.status === 401) {
   const claims = await response.json();
   // Render claims; there are no OAuth tokens in this response.
 }`;
+}
 
 export const flows = {
   login: {
     title: "Вход", summary: "Authorization Code + PKCE: SPA инициирует переход, BFF обменивает код по backchannel.",
     steps: [
-      ["Браузер → BFF", "Пользователь открывает /.auth/login обычной навигацией. ASP.NET Core создаёт state, nonce, PKCE verifier и временные correlation/nonce cookies. Return URL фиксирован: /.", "В браузере нет client secret или code verifier, доступного JavaScript."],
+      ["Браузер → BFF", "Пользователь открывает /.auth/login обычной навигацией. ASP.NET Core создаёт state, nonce, PKCE verifier и временные correlation/nonce cookies. Return URL — корень приложения с учётом PathBase.", "В браузере нет client secret или code verifier, доступного JavaScript."],
       ["BFF → OpenID Provider", "Браузер перенаправляется на authorization endpoint из discovery. Передаются client_id, redirect_uri, response_type=code, scope и code_challenge S256. Пользователь входит на стороне провайдера.", "Провайдер проверяет точный redirect URI и регистрацию confidential client."],
       ["Provider → BFF callback", "Провайдер возвращает code и state на /.auth/login/callback. Framework проверяет state и correlation, затем BFF один раз обменивает code с client secret и PKCE verifier.", "Код не передаётся SPA. Не повторяйте обмен после неопределённого сетевого исхода."],
-      ["BFF → Redis → браузер", "Framework проверяет ID token: подпись, issuer, audience, lifetime и nonce. Полный ticket с токенами защищается Data Protection и записывается в Redis. Браузеру выдаётся защищённая случайная ссылка в cookie, затем redirect /.", "Session cookie: Secure, HttpOnly, SameSite=Strict, Path=/, без Domain. Временные OIDC cookies имеют необходимые framework-настройки для внешнего callback."],
+      ["BFF → Redis → браузер", "Framework проверяет ID token: подпись, issuer, audience, lifetime и nonce. Полный ticket с токенами защищается Data Protection и записывается в Redis. Браузеру выдаётся защищённая случайная ссылка в cookie, затем redirect к корню приложения.", "Session cookie: Secure, HttpOnly, SameSite=Strict, Path=/, без Domain. Временные OIDC cookies имеют необходимые framework-настройки для внешнего callback."],
       ["React → /.auth/me", "После загрузки SPA TanStack Query получает claims через same-origin fetch с X-CSRF: 1. Ответ не содержит access_token, refresh_token, id_token или session reference. Anonymous session возвращает 401.", "Claims подходят для UI. Доступ к ресурсам проверяет API по access token."],
     ],
   },
@@ -137,7 +146,7 @@ export const flows = {
       ["React → antiforgery endpoint", "SPA отменяет свои query и получает /.auth/antiforgery с X-CSRF: 1. Этот endpoint и logout не ждут refresh access token. Ответ содержит framework requestToken и имя form field.", "GET /.auth/end-session не выполняет выход. Для browser redirect sample отправляет native POST form с antiforgery token."],
       ["BFF → Redis GETDEL", "Авторизованный POST /.auth/end-session атомарно забирает текущий ticket и удаляет запись. Используется токен из записи на момент удаления, включая refresh, завершившийся во время запроса. Cookie очищается.", "После разрешения logout разрыв клиентского соединения не отменяет локальное удаление; Redis операция ограничена таймаутом."],
       ["BFF → revocation endpoint", "BFF пытается отозвать текущий refresh token по backchannel с таймаутом 5 секунд. Ошибка отзыва логируется без токенов. Локальная запись уже удалена, поэтому известная cookie больше не авторизует новые запросы.", "Отзыв best effort. При недоступном провайдере нельзя обещать глобальную мгновенную инвалидизацию всех credentials."],
-      ["Браузер → Provider → callback", "BFF инициирует стандартный RP-initiated logout с client_id, id_token_hint и фиксированным post_logout_redirect_uri. Провайдер завершает свою сессию и возвращает браузер на /.auth/signout-callback, затем на /.", "Зарегистрируйте post-logout URI точно. fetch не выполняет нужную top-level навигацию на страницу провайдера."],
+      ["Браузер → Provider → callback", "BFF инициирует стандартный RP-initiated logout с client_id, id_token_hint и фиксированным post_logout_redirect_uri. Провайдер завершает свою сессию и возвращает браузер на /.auth/signout-callback, затем к корню приложения.", "Зарегистрируйте post-logout URI точно. fetch не выполняет нужную top-level навигацию на страницу провайдера."],
       ["Другие вкладки", "Следующий /.auth/me или API-запрос со старой cookie получает 401. UI удаляет кэш данных пользователя и предлагает вход. Незавершённый refresh не может создать прежнюю запись заново.", "Sample не отправляет токены через BroadcastChannel/localStorage и не использует silent-renew iframe."],
     ],
   },

@@ -10,7 +10,7 @@ A .NET 10 LTS Backend-for-Frontend for single-page applications, built on ASP.NE
 
 Register a host-owned StackExchange.Redis `ConnectionMultiplexer` and standard YARP configuration, then call `AddOidcProxy` and `UseOidcProxy`. The public namespace is `MonixOne.OidcProxy.Yarp`; OIDC configuration uses the standard `OpenIdConnectOptions`.
 
-[Setup and architecture](https://github.com/Shulyakovskiy/MonixOne.OidcProxy#readme) · [React/Vite sample and interactive SPA documentation](https://github.com/Shulyakovskiy/MonixOne.OidcProxy/tree/main/samples/MonixOne.OidcProxy.Yarp.SampleHost) · [Verification](https://github.com/Shulyakovskiy/MonixOne.OidcProxy/blob/main/docs/TESTING.md)
+[Setup and architecture](https://github.com/Shulyakovskiy/MonixOne.OidcProxy.Yarp#readme) · [React/Vite sample and interactive SPA documentation](https://github.com/Shulyakovskiy/MonixOne.OidcProxy.Yarp/tree/main/samples/MonixOne.OidcProxy.Yarp.SampleHost) · [Verification](https://github.com/Shulyakovskiy/MonixOne.OidcProxy.Yarp/blob/main/docs/TESTING.md)
 
 Infrastructure must provide Redis availability/TLS/ACL and independent Data Protection key protection. Local logout cannot cancel an already-forwarded API request or guarantee global revocation during an identity-provider outage. See the repository for security boundaries and the upstream advisory status.
 

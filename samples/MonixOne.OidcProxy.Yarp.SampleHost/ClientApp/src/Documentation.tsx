@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { createConfiguration, flows, hostCode, initialSetup, spaCode, validateSetup, type Setup } from "./documentationContent";
-import { routes } from "./routes";
+import { createConfiguration, flows, hostCode, initialSetup, createSpaCode, validateSetup, type Setup } from "./documentationContent";
+import { createRoutes, routes } from "./routes";
 import "./documentation.css";
 
 function Code({ label, value }: { label: string; value: string }) {
@@ -24,7 +24,7 @@ function Code({ label, value }: { label: string; value: string }) {
 
 const steps = ["Топология", "OpenID Provider", "Redis и ключи", "Хост и YARP", "React SPA", "Проверка"];
 const fields: [keyof Setup, string][] = [
-  ["origin", "SPA / BFF origin"], ["authority", "OIDC Authority"], ["clientId", "Client ID"],
+  ["origin", "SPA / BFF origin"], ["pathBase", "PathBase (пусто для корня)"], ["authority", "OIDC Authority"], ["clientId", "Client ID"],
   ["api", "Resource API"], ["application", "Application name"], ["environment", "Environment"],
   ["namespace", "Redis namespace"], ["scopes", "Scopes"],
 ];
@@ -37,15 +37,16 @@ export default function Documentation() {
   const [flowStep, setFlowStep] = useState(0);
   const errors = validateSetup(setup);
   const valid = errors.length === 0;
+  const targetRoutes = createRoutes(setup.pathBase);
   const current = flows[flow];
   const detail = current.steps[flowStep]!;
-  const callback = valid ? `${new URL(setup.origin).origin}/.auth/login/callback` : "Исправьте URL на шаге 1";
-  const logoutCallback = valid ? `${new URL(setup.origin).origin}/.auth/signout-callback` : "Исправьте URL на шаге 1";
+  const callback = valid ? `${new URL(setup.origin).origin}${setup.pathBase}/.auth/login/callback` : "Исправьте URL на шаге 1";
+  const logoutCallback = valid ? `${new URL(setup.origin).origin}${setup.pathBase}/.auth/signout-callback` : "Исправьте URL на шаге 1";
 
   return <div className="docs">
     <header className="doc-header">
-      <a href={routes.docs} className="doc-brand"><img src="/docs-assets/nuget-icon.png" alt="" width="40" height="40" />MonixOne.OidcProxy.Yarp</a>
-      <a href="https://github.com/Shulyakovskiy/MonixOne.OidcProxy">Исходный код ↗</a>
+      <a href={routes.docs} className="doc-brand"><img src={`${routes.docsAssets}/nuget-icon.png`} alt="" width="40" height="40" />MonixOne.OidcProxy.Yarp</a>
+      <a href="https://github.com/Shulyakovskiy/MonixOne.OidcProxy.Yarp">Исходный код ↗</a>
     </header>
     <main>
       <div className="doc-hero"><p className="doc-kicker">.NET 10 · YARP · OPENID CONNECT · REDIS</p>
@@ -68,7 +69,7 @@ export default function Documentation() {
             <div className="doc-field-grid">{fields.map(([key, label]) => <label key={key}>{label}<input value={setup[key]} autoComplete="off" spellCheck={false} onChange={e => setSetup({ ...setup, [key]: e.target.value })} /></label>)}</div>
             {!valid && <div role="alert" className="doc-note doc-error"><strong>Проверьте параметры</strong><ul>{errors.map(error => <li key={error}>{error}</li>)}</ul></div>}
             <p className="doc-note">Это проверка формата, а не проверка подключения. DNS, TLS, доступность Redis, регистрация клиента и права на API проверяются при запуске и ручном проходе сценария.</p>
-            <img className="doc-diagram" src="/docs-assets/BFF-flow.png" alt="SPA обращается к BFF через cookie и CSRF header; BFF использует Redis, OpenID Provider и YARP для доступа к API." />
+            <img className="doc-diagram" src={`${routes.docsAssets}/BFF-flow.png`} alt="SPA обращается к BFF через cookie и CSRF header; BFF использует Redis, OpenID Provider и YARP для доступа к API." />
           </>}
           {step === 1 && <>
             <p>Зарегистрируйте <strong>confidential web client</strong>. Разрешите Authorization Code, Refresh Token и PKCE S256. SPA не регистрируется как public OAuth client и не получает client secret.</p>
@@ -93,18 +94,18 @@ export default function Documentation() {
             <details><summary>Data Protection и восстановление Redis</summary><p>Шифрование ticket не защищает от полного доступа к Redis, если в нём же хранится незащищённый master key ring. Хост должен добавить стандартную защиту Data Protection keys независимым сертификатом или KMS, например через <code>AddDataProtection().ProtectKeysWithCertificate(certificate)</code>. Все реплики должны уметь расшифровывать один key ring.</p><p>При восстановлении backup учитывайте, что он может вернуть удалённые сессии и старые refresh credentials. План восстановления должен сбрасывать сессии и отзывать grants или менять область ключей; пакет сам не может обеспечить монотонность внешнего backup.</p></details>
           </>}
           {step === 3 && <>
-            <Code label="Установка" value="dotnet add package MonixOne.OidcProxy.Yarp --version 6.0.0" />
-            <p>До первой публикации используйте ProjectReference из репозитория или локальный NuGet feed. Добавляйте YARP и ConnectionMultiplexer перед AddOidcProxy. Конфигурация OIDC — стандартный OpenIdConnectOptions.</p>
+            <Code label="Установка" value="dotnet pack src/MonixOne.OidcProxy.Yarp/MonixOne.OidcProxy.Yarp.csproj -c Release -o artifacts/nuget" />
+            <p>Пакет ещё не опубликован в NuGet. Сейчас используются ProjectReference из репозитория или локально собранный nupkg. Добавляйте YARP и ConnectionMultiplexer перед AddOidcProxy. Конфигурация OIDC — стандартный OpenIdConnectOptions.</p>
             {valid ? <Code label="appsettings.json — без секретов" value={createConfiguration(setup)} /> : <p role="alert" className="doc-note doc-error">Сначала исправьте параметры на шаге «Топология».</p>}
             <Code label="Program.cs" value={hostCode} />
-            <p>Пример передаёт путь <code>/api/…</code> без преобразования. Для другого пути используйте стандартные YARP transforms. Все MapReverseProxy-маршруты этого BFF требуют его сессию и CSRF header.</p>
+            <p>Пример передаёт путь <code>/api/…</code> без преобразования. Для другого API пути используйте стандартные YARP transforms. Для размещения SPA под путём задайте PathBase хосту, соберите Vite с тем же base и сохраните префикс на ingress. Все MapReverseProxy-маршруты этого BFF требуют его сессию и CSRF header.</p>
             <details><summary>TLS termination и ingress</summary><p>PublicOrigin — внешний адрес браузера. Если TLS завершается на ingress, настройте стандартный ForwardedHeaders middleware перед HSTS/HTTPS redirection и BFF. Доверяйте только конкретным KnownProxies/KnownNetworks. Не доверяйте произвольному входящему X-Forwarded-*; не отключайте TLS validation downstream.</p><p>Убедитесь, что SPA, callback URI и API-запросы видны браузеру на одном origin. Для Vite development используйте HTTPS dev proxy; PublicOrigin должен совпадать с адресом Vite.</p></details>
           </>}
           {step === 4 && <>
             <p>Устанавливайте <code>X-CSRF: 1</code> для всех BFF data endpoints и проксируемых API, включая GET. Не добавляйте cross-origin CORS-доступ к session API. Переход на login и logout выполняйте навигацией браузера.</p>
-            <Code label="Login и чтение сессии" value={spaCode} />
+            <Code label="Login и чтение сессии" value={createSpaCode(setup.pathBase)} />
             <p>Sample использует официальный <code>@tanstack/react-query</code>, а не OAuth SDK для public SPA. В <code>src/session.ts</code> заданы focus/reconnect refetch, проверка каждые 60 секунд только при активной authenticated SPA и отключение автоматических retries. В фоне interval не работает; absolute session lifetime ограничен сервером.</p>
-            <Code label="Native POST logout с framework antiforgery token" value={`const response = await fetch("${routes.antiforgery}", {\n  credentials: "same-origin", headers: { "X-CSRF": "1" },\n});\nif (!response.ok) throw new Error(\`BFF returned \${response.status}\`);\nconst { requestToken, formFieldName } = await response.json();\nconst form = document.createElement("form");\nform.method = "POST";\nform.action = "${routes.logout}";\nconst field = document.createElement("input");\nfield.type = "hidden";\nfield.name = formFieldName;\nfield.value = requestToken;\nform.append(field);\ndocument.body.append(form);\nform.submit();`} />
+            <Code label="Native POST logout с framework antiforgery token" value={`const response = await fetch("${targetRoutes.antiforgery}", {\n  credentials: "same-origin", headers: { "X-CSRF": "1" },\n});\nif (!response.ok) throw new Error(\`BFF returned \${response.status}\`);\nconst { requestToken, formFieldName } = await response.json();\nconst form = document.createElement("form");\nform.method = "POST";\nform.action = "${targetRoutes.logout}";\nconst field = document.createElement("input");\nfield.type = "hidden";\nfield.name = formFieldName;\nfield.value = requestToken;\nform.append(field);\ndocument.body.append(form);\nform.submit();`} />
             <p>Перед logout отменяйте текущие query и блокируйте новые UI-запросы. После 401 очищайте кэш пользователя и API. После 503 показывайте недоступность, без автоматического повтора POST/refresh или перенаправления в бесконечный login.</p>
             <p className="doc-note">HttpOnly скрывает cookie от JavaScript, но XSS всё ещё может выполнять запросы от имени пользователя. Хост SPA отвечает за CSP, безопасный DOM, зависимости, входные данные и отсутствие секретов в bundle/logs.</p>
           </>}
@@ -121,7 +122,7 @@ export default function Documentation() {
               "При недоступности Redis BFF возвращает 503; токены, cookies, codes и client secret не попадают в логи.",
               "Ingress доверяет только настроенным proxies; DP key ring защищён независимым сертификатом/KMS.",
             ].map(item => <label key={item}><input type="checkbox" />{item}</label>)}</div>
-            <Code label="Проверки репозитория — нужны .NET 10, Docker, Node 24+, pnpm" value={`dotnet test MonixOne.OidcProxy.Yarp.sln -c Release -p:GeneratePackageOnBuild=false\ncd samples/MonixOne.OidcProxy.Yarp.SampleHost/ClientApp\ncorepack pnpm install --frozen-lockfile\ncorepack pnpm test\ncorepack pnpm build`} />
+            <Code label="Проверки репозитория — нужны .NET 10, Docker, Node 24+, pnpm" value={`dotnet test --project tests/MonixOne.OidcProxy.Yarp.Tests/MonixOne.OidcProxy.Yarp.Tests.csproj -c Release -p:GeneratePackageOnBuild=false\ncd samples/MonixOne.OidcProxy.Yarp.SampleHost/ClientApp\ncorepack pnpm install --frozen-lockfile\ncorepack pnpm test\ncorepack pnpm build`} />
             <p>Автотесты проходят реальный HTTP pipeline sample через WebApplicationFactory, WireMock OIDC и Redis. Отдельные сценарии используют настоящий OpenIddict с PostgreSQL и HTTPS API, в том числе encrypted access tokens.</p>
           </>}
           <div className="doc-pagination"><button className="secondary" disabled={step === 0} onClick={() => setStep(step - 1)}>← Назад</button><span>{step + 1} / {steps.length}</span>{step < steps.length - 1 ? <button onClick={() => setStep(step + 1)}>Далее →</button> : <button onClick={() => setSection("flows")}>Как работает SPA →</button>}</div>
@@ -133,8 +134,8 @@ export default function Documentation() {
         <div className="doc-flow-layout"><nav className="doc-flow-steps" aria-label="Этапы сценария">{current.steps.map(([title], index) => <button key={title} aria-current={flowStep === index ? "step" : undefined} onClick={() => setFlowStep(index)}><span>{index + 1}</span>{title}</button>)}</nav>
           <div className="doc-flow-detail" aria-live="polite"><p className="doc-kicker">ЭТАП {flowStep + 1} / {current.steps.length}</p><h3>{detail[0]}</h3><p>{detail[1]}</p><p className="doc-note">{detail[2]}</p><div className="doc-pagination"><button className="secondary" disabled={flowStep === 0} onClick={() => setFlowStep(flowStep - 1)}>Предыдущий этап</button><button disabled={flowStep === current.steps.length - 1} onClick={() => setFlowStep(flowStep + 1)}>Следующий этап</button></div></div>
         </div>
-        <details><summary>Полная схема {flow === "login" ? "входа" : "взаимодействия"}</summary><a href={flow === "login" ? "/docs-assets/BFF-login-workflow.png" : "/docs-assets/BFF-flow.png"}><img className="doc-diagram" src={flow === "login" ? "/docs-assets/BFF-login-workflow.png" : "/docs-assets/BFF-flow.png"} alt="Полная схема SPA BFF; подробное текстовое описание приведено в этапах выше." /></a></details>
-        <h3>Контракт браузера</h3><div className="doc-table-wrap"><table><thead><tr><th>Endpoint</th><th>Как вызвать</th><th>Результат</th></tr></thead><tbody>
+        <details><summary>Полная схема {flow === "login" ? "входа" : "взаимодействия"}</summary><a href={flow === "login" ? `${routes.docsAssets}/BFF-login-workflow.png` : `${routes.docsAssets}/BFF-flow.png`}><img className="doc-diagram" src={flow === "login" ? `${routes.docsAssets}/BFF-login-workflow.png` : `${routes.docsAssets}/BFF-flow.png`} alt="Полная схема SPA BFF; подробное текстовое описание приведено в этапах выше." /></a></details>
+        <h3>Контракт браузера</h3><p>Пути ниже относятся к текущему Vite base. Host PathBase и Vite base должны совпадать; Callback URI также включают PathBase.</p><div className="doc-table-wrap"><table><thead><tr><th>Endpoint</th><th>Как вызвать</th><th>Результат</th></tr></thead><tbody>
           <tr><td>GET {routes.login}</td><td>Top-level navigation</td><td>OIDC redirect, затем /</td></tr>
           <tr><td>GET {routes.user}</td><td>Cookie + X-CSRF: 1</td><td>Claims; 401 без сессии</td></tr>
           <tr><td>/api/…</td><td>Cookie + X-CSRF: 1</td><td>YARP → настроенный HTTPS API</td></tr>

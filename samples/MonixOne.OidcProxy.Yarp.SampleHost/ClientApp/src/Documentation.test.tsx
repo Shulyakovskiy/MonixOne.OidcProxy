@@ -62,3 +62,21 @@ it("navigates refresh and logout stages and explains the race", () => {
   // Assert
   expect(screen.getByText(/на момент удаления/)).toBeVisible();
 });
+
+it("generates a mounted SPA configuration and matching callback URIs", () => {
+  // Arrange
+  render(<Documentation />);
+  // Act
+  fireEvent.change(screen.getByLabelText("PathBase (пусто для корня)"), { target: { value: "/workspace/portal" } });
+  fireEvent.click(screen.getByRole("button", { name: /02.*OpenID Provider/ }));
+  // Assert
+  expect(within(screen.getByRole("region", { name: "Redirect URI" })).getByText("https://spa.example.com/workspace/portal/.auth/login/callback")).toBeVisible();
+  // Act
+  fireEvent.click(screen.getByRole("button", { name: /04.*Хост и YARP/ }));
+  // Assert
+  expect(screen.getByRole("region", { name: "appsettings.json — без секретов" })).toHaveTextContent('"PathBase": "/workspace/portal"');
+  // Act
+  fireEvent.click(screen.getByRole("button", { name: /05.*React SPA/ }));
+  // Assert
+  expect(screen.getByRole("region", { name: "Login и чтение сессии" })).toHaveTextContent('/workspace/portal/.auth/me');
+});
