@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>MonixOne.OidcProxy.Yarp.SampleHost</RootNamespace>
+    <DefaultItemExcludes>$(DefaultItemExcludes);ClientApp/node_modules/**</DefaultItemExcludes>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/MonixOne.OidcProxy.Yarp/MonixOne.OidcProxy.Yarp.csproj" />
+    <Content Remove="ClientApp/**" />
+  </ItemGroup>
+</Project>
