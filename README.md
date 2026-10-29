@@ -155,15 +155,7 @@ builder.Services.AddSingleton(sp => ConnectionMultiplexer.Connect(
     ?? throw new InvalidOperationException("ConnectionStrings:Redis is required.")));
 builder.Services.AddReverseProxy()
     .LoadFromConfig(builder.Configuration.GetRequiredSection("ReverseProxy"));
-builder.Services.AddOidcProxy(bff =>
-{
-    builder.Configuration.GetRequiredSection("Bff").Bind(bff);
-    bff.EnvironmentName = builder.Environment.EnvironmentName;
-});
-foreach (var section in builder.Configuration.GetRequiredSection("Bff:Clients").GetChildren())
-    builder.Services.AddOidcProxyClient(section.Key,
-        client => section.Bind(client),
-        oidc => section.GetRequiredSection("OpenIdConnect").Bind(oidc));
+builder.Services.AddOidcProxy(builder.Configuration.GetRequiredSection("Bff"));
 
 var app = builder.Build();
 app.Services.GetRequiredService<ConnectionMultiplexer>();
@@ -176,7 +168,7 @@ app.MapFallbackToFile("{**path}", "index.html").AllowAnonymous();
 app.Run();
 ```
 
-Для SPA под `/app` задайте `Bff:Clients:workspace:PathBase=/app` и Vite base `/app/`. Ingress сохраняет префикс до BFF. Callback URI клиента workspace: `https://workspace.example.com/app/.auth/login/callback` и `https://workspace.example.com/app/.auth/signout-callback`. Пакет выбирает клиента по точному HTTPS host/port, применяет стандартный ASP.NET Core PathBase и выбирает его именованный OIDC handler. Cookie и OIDC state защищаются разными framework-схемами; Redis sessions изолированы по имени клиента. Клиенты регистрируются при запуске; изменение состава origins/credentials требует перезапуска хоста.
+Для SPA под `/app` задайте `Bff:Clients:workspace:PathBase=/app` и Vite base `/app/`. Ingress сохраняет префикс до BFF. Callback URI клиента workspace: `https://workspace.example.com/app/.auth/login/callback` и `https://workspace.example.com/app/.auth/signout-callback`. Пакет выбирает клиента по точному HTTPS host/port, применяет стандартный ASP.NET Core PathBase и выбирает его именованный OIDC handler. Cookie и OIDC state защищаются разными framework-схемами; Redis sessions изолированы по имени клиента. Один `AddOidcProxy(configurationSection)` автоматически обходит `Clients` и регистрирует все схемы; EnvironmentName берётся из IHostEnvironment. Клиенты регистрируются при запуске; изменение состава origins/credentials требует перезапуска хоста.
 
 `UseOidcProxy()` подключает routing/authentication/authorization, BFF endpoints и `MapReverseProxy()`. Вызывайте его до static files и других routing middleware; дополнительный MapReverseProxy не нужен. Каждый BFF route содержит `Metadata["OidcProxy.Client"]` и точный `Match.Hosts`, совпадающий с PublicOrigin authority. Wildcard/чужой host или неизвестный client отклоняются при запуске. Route на зарегистрированном SPA-хосте без client metadata получает 403. Клиент выбирается конфигурацией, query/header пользователя его не меняет.
 
@@ -232,7 +224,7 @@ Framework защищает session cookie; она содержит случай�
 
 YARP удаляет входящие Cookie/Authorization, добавляет server access token и убирает downstream Set-Cookie. Destinations фиксируются конфигурацией по HTTPS, запрет на userinfo/query/fragment и отключение certificate validation. Authenticated ответы имеют `Cache-Control: no-store`. API самостоятельно проверяет issuer, audience/resource и scope/roles.
 
-Refresh начинается за 30 секунд до истечения access token. Redis CAS сохраняет pending marker до обмена rotating credential; один владелец обслуживает конкурентные запросы/реплики. Caller disconnect не прерывает сохранение результата. Deadline — 30 секунд; refresh/code exchange не повторяются при неизвестном исходе. Отсутствие нового ID/refresh token обрабатывается по стандарту.
+Refresh начинается за 30 секунд до истечения access token. Redis CAS сохраняет pending marker до обмена rotating credential; один владелец обслуживает конкурентные запросы/реплики. Caller disconnect не прерывает сохранение результата. Deadline — 30 секунд; refresh/code exchange не повторяются при неизвестном исходе. Отсутствие нового ID/refresh token обрабатывается по стандарту. Если первичный code exchange уже выдал refresh token, а проверка token response или ID token отклонила вход, BFF пытается отозвать этот известный credential до возврата ошибки; серверная сессия не создаётся.
 
 Logout атомарно выполняет GETDEL текущего ticket, затем очищает cookie и пытается отозвать refresh token с ограниченным таймаутом. Поздний refresh не восстанавливает удалённую запись и отзывает известный новый credential best effort. Antiforgery/logout не блокируются ожидающим refresh. Logout одного клиента удаляет только его локальную сессию; IdP может дополнительно завершать другие SSO grants по своей политике.
 

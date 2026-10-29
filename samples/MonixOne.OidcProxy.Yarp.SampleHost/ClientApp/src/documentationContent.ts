@@ -103,15 +103,7 @@ builder.Services.AddSingleton(sp => ConnectionMultiplexer.Connect(
     ?? throw new InvalidOperationException("ConnectionStrings:Redis is required.")));
 builder.Services.AddReverseProxy()
     .LoadFromConfig(builder.Configuration.GetRequiredSection("ReverseProxy"));
-builder.Services.AddOidcProxy(bff =>
-{
-    builder.Configuration.GetRequiredSection("Bff").Bind(bff);
-    bff.EnvironmentName = builder.Environment.EnvironmentName;
-});
-foreach (var section in builder.Configuration.GetRequiredSection("Bff:Clients").GetChildren())
-    builder.Services.AddOidcProxyClient(section.Key,
-        client => section.Bind(client),
-        oidc => section.GetRequiredSection("OpenIdConnect").Bind(oidc));
+builder.Services.AddOidcProxy(builder.Configuration.GetRequiredSection("Bff"));
 
 var app = builder.Build();
 app.Services.GetRequiredService<ConnectionMultiplexer>();

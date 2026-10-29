@@ -9,7 +9,7 @@ A .NET 10 LTS Backend-for-Frontend for single-page applications, built on ASP.NE
 - Same-origin SPA endpoints with CSRF protection, server access-token forwarding to configured HTTPS YARP destinations, and no in-memory session fallback.
 - Verified interoperability with OpenIddict, including encrypted access tokens, refresh, revocation and logout.
 
-Register a host-owned StackExchange.Redis `ConnectionMultiplexer` and standard YARP configuration, then call `AddOidcProxy`, `AddOidcProxyClient` for each public SPA origin, and `UseOidcProxy`. The public namespace is `MonixOne.OidcProxy.Yarp`; OIDC configuration uses the standard `OpenIdConnectOptions`.
+Register a host-owned StackExchange.Redis `ConnectionMultiplexer` and standard YARP configuration, then call `AddOidcProxy(configuration.GetRequiredSection("Bff"))` and `UseOidcProxy`. Client registration is automatic from the Clients collection in that section. The public namespace is `MonixOne.OidcProxy.Yarp`; OIDC configuration uses the standard `OpenIdConnectOptions`.
 
 [Setup and architecture](https://github.com/Shulyakovskiy/MonixOne.OidcProxy.Yarp#readme) · [React/Vite sample and interactive SPA documentation](https://github.com/Shulyakovskiy/MonixOne.OidcProxy.Yarp/tree/main/samples/MonixOne.OidcProxy.Yarp.SampleHost) · [Verification](https://github.com/Shulyakovskiy/MonixOne.OidcProxy.Yarp/blob/main/docs/TESTING.md)
 

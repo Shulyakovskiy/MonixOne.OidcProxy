@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
@@ -21,6 +22,33 @@ namespace MonixOne.OidcProxy.Yarp;
 /// </summary>
 public static class ServiceCollectionExtensions
 {
+    /// <summary>
+    /// Binds shared settings and automatically registers every named client from
+    /// the supplied BFF configuration section. Uses the host's environment name.
+    /// </summary>
+    public static IServiceCollection AddOidcProxy(this IServiceCollection services, IConfigurationSection configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        var clients = configuration.GetRequiredSection("Clients").GetChildren().ToArray();
+        if (clients.Length == 0)
+            throw new InvalidOperationException($"{configuration.Path}:Clients must contain at least one SPA client.");
+        services.AddOidcProxy(options => configuration.Bind(options));
+        services.AddOptions<ProxyOptions>().Configure<IHostEnvironment>((options, environment) =>
+            options.EnvironmentName = environment.EnvironmentName);
+        foreach (var client in clients)
+        {
+            var oidcConfiguration = client.GetRequiredSection("OpenIdConnect");
+            services.AddOidcProxyClient(client.Key, options => client.Bind(options), oidc =>
+            {
+                // ConfigurationBinder appends to preinitialized collections. An
+                // explicit scope list must replace the native openid/profile defaults.
+                if (oidcConfiguration.GetSection(nameof(OpenIdConnectOptions.Scope)).Exists()) oidc.Scope.Clear();
+                oidcConfiguration.Bind(oidc);
+            });
+        }
+        return services;
+    }
+
     /// <summary>
     /// Registers shared infrastructure after YARP and a host-owned ConnectionMultiplexer.
     /// </summary>

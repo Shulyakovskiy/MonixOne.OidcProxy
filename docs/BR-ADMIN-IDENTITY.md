@@ -34,7 +34,7 @@ SPA любого framework
     → Bearer resource APIs, включая Calendar API
 ```
 
-Пакет не должен содержать названия BR-приложений, предопределённые client_id, OTP/passkey grants, business scope lists или legacy SessionInfo. Authority/client/scopes/публичный origin/Redis scope задаёт host; destinations и path transforms задаёт YARP. Один BFF-хост обслуживает много SPA на разных публичных хостах. Каждая имеет AddOidcProxyClient, собственные client_id/cookie/state/session keys; API routes связываются через Match.Hosts и Metadata["OidcProxy.Client"]. Повторное использование пакета другой SPA не требует изменения его кода.
+Пакет не должен содержать названия BR-приложений, предопределённые client_id, OTP/passkey grants, business scope lists или legacy SessionInfo. Authority/client/scopes/публичный origin/Redis scope задаёт host; destinations и path transforms задаёт YARP. Один BFF-хост обслуживает много SPA на разных публичных хостах. Каждая задаётся в Bff:Clients и автоматически получает собственные client_id/cookie/state/session keys; API routes связываются через Match.Hosts и Metadata["OidcProxy.Client"]. Повторное использование пакета другой SPA не требует изменения его кода.
 
 Node `BrowserSessions`, `BrowserIdentity`, session controllers, cookie, credentials storage и их refresh/revocation flow подлежат удалению при реализации перехода. Calendar business API остаётся resource server с собственной авторизацией. При удалении Node BFF из IdentityGuard также удаляются зависимость от BrowserSessions и cookie fallback; входной контракт API становится только Bearer. Сохранение Node session как второго BFF, совместимый facade над `/session-api/*` и browser OAuth-token SDK в целевую схему не входят.
 

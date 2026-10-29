@@ -9,7 +9,7 @@
 | Воспроизводимая сборка | Deterministic, ContinuousIntegrationBuild, portable PDB |
 | Central package management | Directory.Packages.props, версии только в одном месте |
 | Native test runner | Microsoft.Testing.Platform в global.json, UseMicrosoftTestingPlatformRunner/TestingPlatformDotnetTestSupport, xunit.v3 и VS runner 4.0.0 |
-| Защита от пустого test run | CI требует минимум 89 server tests; отдельный повтор refresh/multi-host — минимум 40 |
+| Защита от пустого test run | CI требует минимум 92 server tests; отдельный повтор refresh/multi-host — минимум 40 |
 | Package metadata | Title, Description, Tags, Authors, Icon, README, RepositoryUrl/type, PublishRepositoryUrl, XML documentation |
 | Symbols | IncludeSymbols, snupkg |
 | CI/build/pack | ubuntu-24.04, restore --disable-parallel, build без build servers/-m:1, GeneratePackageOnBuild=false при CI build, pack отдельного проекта |

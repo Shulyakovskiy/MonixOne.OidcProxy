@@ -7,6 +7,8 @@ using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.WebUtilities;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using StackExchange.Redis;
@@ -88,19 +90,8 @@ public sealed class BffApplicationFactory(InfrastructureFixture infrastructure, 
             };
             foreach (var client in _clients)
             {
-                services.AddOidcProxyClient(client.Name, options =>
+                services.Configure<OpenIdConnectOptions>(OidcProxyDefaults.OpenIdConnectScheme(client.Name), options =>
                 {
-                    options.PublicOrigin = client.Origin;
-                    options.PathBase = client.PathBase;
-                }, options =>
-                {
-                    options.Authority = client.Authority.AbsoluteUri.TrimEnd('/');
-                    options.ClientId = client.ClientId;
-                    options.ClientSecret = client.Secret;
-                    options.Scope.Clear();
-                    options.Scope.Add("openid");
-                    options.Scope.Add("offline_access");
-                    options.Scope.Add("api.read");
                     options.BackchannelHttpHandler = new HttpClientHandler
                     {
                         ServerCertificateCustomValidationCallback = (_, certificate, _, _) =>
@@ -119,6 +110,27 @@ public sealed class BffApplicationFactory(InfrastructureFixture infrastructure, 
             services.RemoveAll<IForwarderHttpClientFactory>();
             services.AddSingleton<IForwarderHttpClientFactory>(new CertificateForwarderFactory(infrastructure.Certificate));
         });
+    }
+
+    protected override IHost CreateHost(IHostBuilder builder)
+    {
+        builder.ConfigureHostConfiguration(configuration =>
+        {
+            var values = new Dictionary<string, string?>();
+            foreach (var client in _clients)
+            {
+                var prefix = "Bff:Clients:" + client.Name + ":";
+                values[prefix + "PublicOrigin"] = client.Origin.AbsoluteUri;
+                values[prefix + "PathBase"] = client.PathBase;
+                values[prefix + "OpenIdConnect:Authority"] = client.Authority.AbsoluteUri.TrimEnd('/');
+                values[prefix + "OpenIdConnect:ClientId"] = client.ClientId;
+                values[prefix + "OpenIdConnect:ClientSecret"] = client.Secret;
+                foreach (var (scope, index) in new[] { "openid", "offline_access", "api.read" }.Select((value, index) => (value, index)))
+                    values[prefix + "OpenIdConnect:Scope:" + index] = scope;
+            }
+            configuration.AddInMemoryCollection(values);
+        });
+        return base.CreateHost(builder);
     }
 
     public HttpClient CreateBrowser(bool handleCookies = true) => CreateClient(new WebApplicationFactoryClientOptions

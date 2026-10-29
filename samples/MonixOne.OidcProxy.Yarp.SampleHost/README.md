@@ -64,6 +64,6 @@ API `/api/status` — пример внешнего маршрута, его р�
 
 ## Несколько SPA на разных хостах
 
-Добавьте записи в `Bff:Clients`; Program регистрирует каждую через AddOidcProxyClient. Для каждого клиента нужны PublicOrigin, собственный confidential client_id/secret, разрешённые scopes и точные callback URI. YARP route указывает тот же host в Match.Hosts и client name в Metadata["OidcProxy.Client"]. Разные bundles обслуживайте host-bound anonymous YARP routes, а resource routes оставьте защищёнными. Пример двух клиентов приведён в [корневом руководстве](../../README.md).
+Добавьте записи в `Bff:Clients`; один AddOidcProxy с секцией Bff автоматически регистрирует всех клиентов внутри пакета. Для каждого клиента нужны PublicOrigin, собственный confidential client_id/secret, разрешённые scopes и точные callback URI. YARP route указывает тот же host в Match.Hosts и client name в Metadata["OidcProxy.Client"]. Разные bundles обслуживайте host-bound anonymous YARP routes, а resource routes оставьте защищёнными. Пример двух клиентов приведён в [корневом руководстве](../../README.md).
 
 Session cookie, OIDC state, Redis sessions и refresh/logout изолированы по клиентам. Одинаковые технические пути `/.auth/*` допустимы на разных хостах. Неизвестные SPA origins и маршруты без client binding не получают чужую сессию. Для hot reload под PathBase дополнительно настройте Vite proxy на prefixed auth/API paths; встроенный dev proxy sample показывает корневую SPA.
