@@ -21,16 +21,19 @@ public partial class Program
         {
             builder.Configuration.GetRequiredSection("Bff").Bind(options);
             options.EnvironmentName = builder.Environment.EnvironmentName;
-        }, oidc => builder.Configuration.GetRequiredSection("OpenIdConnect").Bind(oidc));
+        });
+        foreach (var section in builder.Configuration.GetRequiredSection("Bff:Clients").GetChildren())
+            builder.Services.AddOidcProxyClient(section.Key,
+                client => section.Bind(client),
+                oidc => section.GetRequiredSection("OpenIdConnect").Bind(oidc));
 
         await using var app = builder.Build();
         app.Services.GetRequiredService<ConnectionMultiplexer>();
-        app.UsePathBase(PathString.FromUriComponent(builder.Configuration["PathBase"] ?? string.Empty));
         if (!app.Environment.IsDevelopment()) app.UseHsts();
         app.UseHttpsRedirection();
+        app.UseOidcProxy();
         app.UseDefaultFiles();
         app.UseStaticFiles();
-        app.UseOidcProxy();
         app.MapFallbackToFile("{**path}", "index.html").AllowAnonymous();
         await app.RunAsync();
     }

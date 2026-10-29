@@ -54,7 +54,7 @@ public sealed class SessionBoundaryTests(InfrastructureFixture infrastructure)
         using var identityBrowser = identity.CreateIdentityBrowser();
         using var login = await browser.LoginAsync(identityBrowser);
         other.DefaultRequestHeaders.Add("Cookie", login.Headers.GetValues("Set-Cookie")
-            .Single(value => value.StartsWith("__Host-Http-oidcproxy.session=")).Split(';')[0]);
+            .Single(value => value.StartsWith("__Host-Http-oidcproxy.spa.session=")).Split(';')[0]);
 
         // Act
         using var crossNamespace = await other.ApiAsync(cancellationToken: TestContext.Current.CancellationToken);

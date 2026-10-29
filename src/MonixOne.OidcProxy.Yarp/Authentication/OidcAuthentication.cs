@@ -15,12 +15,12 @@ namespace MonixOne.OidcProxy.Yarp.Authentication;
 
 internal static class OidcAuthentication
 {
-    internal static void Register(IServiceCollection services, Action<OpenIdConnectOptions> configureOidc)
+    internal static void Register(IServiceCollection services, string name, Action<OpenIdConnectOptions> configureOidc)
     {
         services.AddAuthentication()
-            .AddCookie(OidcProxyDefaults.CookieScheme, cookie =>
+            .AddCookie(OidcProxyDefaults.CookieScheme(name), cookie =>
             {
-                cookie.Cookie.Name = "__Host-Http-oidcproxy.session";
+                cookie.Cookie.Name = OidcProxyDefaults.CookieName(name);
                 cookie.Cookie.Path = "/";
                 cookie.Cookie.Domain = null;
                 cookie.Cookie.SecurePolicy = CookieSecurePolicy.Always;
@@ -40,11 +40,16 @@ internal static class OidcAuthentication
                 };
                 cookie.Events.OnValidatePrincipal = async context =>
                 {
+                    if (!context.HttpContext.RequestServices.GetRequiredService<BffClients>().ByName[name].Matches(context.Request))
+                    {
+                        context.RejectPrincipal();
+                        return;
+                    }
                     var id = context.Principal?.FindFirstValue(BffConstants.SessionClaim);
                     try
                     {
                         var snapshot = id is null ? null : await context.HttpContext.RequestServices
-                            .GetRequiredService<SessionStore>().ReadAsync(id, context.HttpContext.RequestAborted);
+                            .GetRequiredKeyedService<SessionStore>(name).ReadAsync(id, context.HttpContext.RequestAborted);
                         if (snapshot is null) context.RejectPrincipal();
                         else context.ReplacePrincipal(SessionPrincipal.WithSessionId(snapshot.State.ReadTicket().Principal, id!));
                     }
@@ -60,20 +65,20 @@ internal static class OidcAuthentication
                     if (id is not null)
                     {
                         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-                        await context.HttpContext.RequestServices.GetRequiredService<SessionStore>().RemoveAsync(id, timeout.Token);
+                        await context.HttpContext.RequestServices.GetRequiredKeyedService<SessionStore>(name).RemoveAsync(id, timeout.Token);
                     }
                 };
             })
-            .AddOpenIdConnect(OidcProxyDefaults.OpenIdConnectScheme, oidc =>
+            .AddOpenIdConnect(OidcProxyDefaults.OpenIdConnectScheme(name), oidc =>
             {
                 oidc.TokenValidationParameters.NameClaimType = "name";
                 oidc.TokenValidationParameters.RoleClaimType = "role";
                 configureOidc(oidc);
             });
-        services.AddOptions<CookieAuthenticationOptions>(OidcProxyDefaults.CookieScheme)
-            .Configure<ProxyOptions>((cookie, options) => cookie.ExpireTimeSpan = options.SessionAbsoluteTimeout);
-        services.AddOptions<OpenIdConnectOptions>(OidcProxyDefaults.OpenIdConnectScheme)
-            .Configure<ProxyOptions>(ConfigureProtocolEvents)
+        services.AddOptions<CookieAuthenticationOptions>(OidcProxyDefaults.CookieScheme(name))
+            .Configure<Microsoft.Extensions.Options.IOptionsMonitor<OidcProxyClientOptions>>((cookie, options) => cookie.ExpireTimeSpan = options.Get(name).SessionAbsoluteTimeout);
+        services.AddOptions<OpenIdConnectOptions>(OidcProxyDefaults.OpenIdConnectScheme(name))
+            .Configure<Microsoft.Extensions.Options.IOptionsMonitor<OidcProxyClientOptions>>((oidc, options) => ConfigureProtocolEvents(oidc, name, options.Get(name)))
             .Validate(o => Uri.TryCreate(o.Authority, UriKind.Absolute, out var authority) && authority.Scheme == "https" &&
                 authority.UserInfo.Length == 0 && authority.Query.Length == 0 && authority.Fragment.Length == 0,
                 "An HTTPS OIDC Authority without credentials, query or fragment is required.")
@@ -82,9 +87,9 @@ internal static class OidcAuthentication
             .ValidateOnStart();
     }
 
-    private static void ConfigureProtocolEvents(OpenIdConnectOptions oidc, ProxyOptions options)
+    private static void ConfigureProtocolEvents(OpenIdConnectOptions oidc, string name, OidcProxyClientOptions options)
     {
-        oidc.SignInScheme = OidcProxyDefaults.CookieScheme;
+        oidc.SignInScheme = OidcProxyDefaults.CookieScheme(name);
         oidc.SignedOutCallbackPath = OidcProxyRoutes.LogoutCallback;
         oidc.RemoteSignOutPath = PathString.Empty;
         oidc.BackchannelTimeout = TimeSpan.FromSeconds(10);
@@ -149,11 +154,11 @@ internal static class OidcAuthentication
         {
             var services = context.HttpContext.RequestServices;
             var now = services.GetRequiredService<TimeProvider>().GetUtcNow();
-            var store = services.GetRequiredService<SessionStore>();
+            var store = services.GetRequiredKeyedService<SessionStore>(name);
             var properties = context.Properties!;
             properties.Items.TryGetValue(BffConstants.PreviousSession, out var previousId);
             properties.Items.Remove(BffConstants.PreviousSession);
-            var fullTicket = new AuthenticationTicket(context.Principal!, properties, OidcProxyDefaults.CookieScheme);
+            var fullTicket = new AuthenticationTicket(context.Principal!, properties, OidcProxyDefaults.CookieScheme(name));
             string? id = null;
             try
             {
@@ -163,11 +168,11 @@ internal static class OidcAuthentication
                     using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
                     var previousTicket = await store.TakeAsync(previousId, timeout.Token);
                     if (previousTicket is not null)
-                        await services.GetRequiredService<TokenSession>().RevokeAsync(previousTicket, CancellationToken.None);
+                        await services.GetRequiredKeyedService<TokenSession>(name).RevokeAsync(previousTicket, CancellationToken.None);
                 }
                 // The cookie receives only a framework-protected random reference.
                 context.Principal = new ClaimsPrincipal(new ClaimsIdentity(
-                    [new Claim(BffConstants.SessionClaim, id)], OidcProxyDefaults.CookieScheme));
+                    [new Claim(BffConstants.SessionClaim, id)], OidcProxyDefaults.CookieScheme(name)));
                 properties.Items.Clear();
                 properties.IssuedUtc = now;
                 properties.ExpiresUtc = now + options.SessionAbsoluteTimeout;
@@ -185,7 +190,7 @@ internal static class OidcAuthentication
                             .LogError("Unable to remove failed sign-in session. Failure type: {FailureType}", e.GetType().Name);
                     }
                 }
-                await services.GetRequiredService<TokenSession>().RevokeAsync(fullTicket, CancellationToken.None);
+                await services.GetRequiredKeyedService<TokenSession>(name).RevokeAsync(fullTicket, CancellationToken.None);
                 throw;
             }
         };

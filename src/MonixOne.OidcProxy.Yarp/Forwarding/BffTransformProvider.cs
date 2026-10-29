@@ -9,9 +9,21 @@ namespace MonixOne.OidcProxy.Yarp.Forwarding;
 /// Keeps browser credentials at the BFF boundary and limits forwarding to
 /// explicitly configured HTTPS backends with certificate validation enabled.
 /// </summary>
-internal sealed class BffTransformProvider : ITransformProvider
+internal sealed class BffTransformProvider(BffClients clients) : ITransformProvider
 {
-    public void ValidateRoute(TransformRouteValidationContext context) { }
+    public void ValidateRoute(TransformRouteValidationContext context)
+    {
+        if (context.Route.Metadata?.TryGetValue(OidcProxyDefaults.ClientMetadataKey, out var name) != true) return;
+        if (name is null || !clients.ByName.TryGetValue(name, out var client))
+        {
+            context.Errors.Add(new ArgumentException($"Unknown BFF client '{name}' on route '{context.Route.RouteId}'."));
+            return;
+        }
+        // Exact host bindings prevent token routing across origins and wildcard hosts.
+        if (context.Route.Match.Hosts is not { Count: > 0 } hosts || hosts.Any(h =>
+            !string.Equals(h, client.Options.PublicOrigin!.Authority, StringComparison.OrdinalIgnoreCase)))
+            context.Errors.Add(new ArgumentException($"BFF route '{context.Route.RouteId}' must match only its client's exact PublicOrigin authority."));
+    }
 
     public void ValidateCluster(TransformClusterValidationContext context)
     {
@@ -25,6 +37,7 @@ internal sealed class BffTransformProvider : ITransformProvider
 
     public void Apply(TransformBuilderContext context)
     {
+        if (context.Route.Metadata?.ContainsKey(OidcProxyDefaults.ClientMetadataKey) != true) return;
         context.AddRequestTransform(request =>
         {
             request.ProxyRequest.Headers.Remove("Cookie");

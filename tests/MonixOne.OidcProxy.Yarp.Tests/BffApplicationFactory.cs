@@ -31,11 +31,17 @@ public sealed class BffApplicationFactory(InfrastructureFixture infrastructure, 
     public string PathBase { get; set; } = string.Empty;
     public string ProxyPath { get; set; } = "/api/{**all}";
     public string? WebRoot { get; set; }
+    public Action<List<RouteConfig>>? ConfigureRoutes { get; set; }
+    private readonly List<(string Name, Uri Origin, Uri Authority, string ClientId, string Secret, Uri Backend, string PathBase)> _clients = [];
+    internal void AddClient(string name, Uri origin, OidcWireMock identity, string pathBase = "")
+        => AddClient(name, origin, identity.Origin, identity.RegisteredClientId, OidcWireMock.ClientSecret, identity.Origin, pathBase);
+    internal void AddClient(string name, Uri origin, Uri authority, string clientId, string secret, Uri backend, string pathBase = "")
+        => _clients.Add((name, origin, authority, clientId, secret, backend, pathBase));
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Testing");
-        builder.UseSetting("PathBase", PathBase);
+
         if (WebRoot is not null) builder.UseWebRoot(WebRoot);
         builder.ConfigureServices(services =>
         {
@@ -45,12 +51,16 @@ public sealed class BffApplicationFactory(InfrastructureFixture infrastructure, 
             services.AddSingleton<TimeProvider>(Clock);
             services.PostConfigure<ProxyOptions>(options =>
             {
-                options.PublicOrigin = Origin;
                 options.ApplicationName = "test-spa";
                 options.EnvironmentName = "testing";
                 options.KeyNamespace = KeyNamespace;
             });
-            services.Configure<OpenIdConnectOptions>(OidcProxyDefaults.OpenIdConnectScheme, options =>
+            services.PostConfigure<OidcProxyClientOptions>("spa", options =>
+            {
+                options.PublicOrigin = Origin;
+                options.PathBase = PathBase;
+            });
+            services.Configure<OpenIdConnectOptions>(OidcProxyDefaults.OpenIdConnectScheme("spa"), options =>
             {
                 options.Authority = authority.AbsoluteUri.TrimEnd('/');
                 options.ClientId = clientId;
@@ -64,12 +74,48 @@ public sealed class BffApplicationFactory(InfrastructureFixture infrastructure, 
                 };
                 ConfigureOidc?.Invoke(options);
             });
-            services.Configure<CookieAuthenticationOptions>(OidcProxyDefaults.CookieScheme, options => options.TimeProvider = Clock);
+            services.Configure<CookieAuthenticationOptions>(OidcProxyDefaults.CookieScheme("spa"), options => options.TimeProvider = Clock);
             services.RemoveAll<IProxyConfigProvider>();
-            services.AddSingleton<IProxyConfigProvider>(new InMemoryConfigProvider(
-                [new RouteConfig { RouteId = "api", ClusterId = "api", Match = new() { Path = ProxyPath } }],
-                [new ClusterConfig { ClusterId = "api", Destinations = new Dictionary<string, DestinationConfig>
-                    { ["primary"] = new() { Address = backend.AbsoluteUri } } }]));
+            var routes = new List<RouteConfig>
+            {
+                new() { RouteId = "api", ClusterId = "api", Match = new() { Path = ProxyPath, Hosts = [Origin.Authority] },
+                    Metadata = new Dictionary<string, string> { [OidcProxyDefaults.ClientMetadataKey] = "spa" } }
+            };
+            var clusters = new List<ClusterConfig>
+            {
+                new() { ClusterId = "api", Destinations = new Dictionary<string, DestinationConfig>
+                    { ["primary"] = new() { Address = backend.AbsoluteUri } } }
+            };
+            foreach (var client in _clients)
+            {
+                services.AddOidcProxyClient(client.Name, options =>
+                {
+                    options.PublicOrigin = client.Origin;
+                    options.PathBase = client.PathBase;
+                }, options =>
+                {
+                    options.Authority = client.Authority.AbsoluteUri.TrimEnd('/');
+                    options.ClientId = client.ClientId;
+                    options.ClientSecret = client.Secret;
+                    options.Scope.Clear();
+                    options.Scope.Add("openid");
+                    options.Scope.Add("offline_access");
+                    options.Scope.Add("api.read");
+                    options.BackchannelHttpHandler = new HttpClientHandler
+                    {
+                        ServerCertificateCustomValidationCallback = (_, certificate, _, _) =>
+                            certificate?.Thumbprint == infrastructure.Certificate.Thumbprint
+                    };
+                });
+                services.Configure<CookieAuthenticationOptions>(OidcProxyDefaults.CookieScheme(client.Name), options => options.TimeProvider = Clock);
+                routes.Add(new RouteConfig { RouteId = client.Name, ClusterId = client.Name,
+                    Match = new() { Path = "/api/{**all}", Hosts = [client.Origin.Authority] },
+                    Metadata = new Dictionary<string, string> { [OidcProxyDefaults.ClientMetadataKey] = client.Name } });
+                clusters.Add(new ClusterConfig { ClusterId = client.Name, Destinations = new Dictionary<string, DestinationConfig>
+                    { ["primary"] = new() { Address = client.Backend.AbsoluteUri } } });
+            }
+            ConfigureRoutes?.Invoke(routes);
+            services.AddSingleton<IProxyConfigProvider>(new InMemoryConfigProvider(routes, clusters));
             services.RemoveAll<IForwarderHttpClientFactory>();
             services.AddSingleton<IForwarderHttpClientFactory>(new CertificateForwarderFactory(infrastructure.Certificate));
         });
@@ -119,28 +165,28 @@ internal static class BrowserRequests
         return await browser.SendAsync(request, cancellationToken);
     }
 
-    internal static async Task<HttpResponseMessage> LoginAsync(this HttpClient browser, HttpClient identity, string pathBase = "", string? returnUrl = null)
+    internal static async Task<HttpResponseMessage> LoginAsync(this HttpClient browser, HttpClient identity, string pathBase = "", string? returnUrl = null, Uri? origin = null)
     {
         var path = pathBase + OidcProxyRoutes.Login;
         if (returnUrl is not null) path = QueryHelpers.AddQueryString(path, "returnUrl", returnUrl);
-        var start = await browser.GetAsync(path);
+        var start = await browser.GetAsync(origin is null ? path : new Uri(origin, path).AbsoluteUri);
         if (start.StatusCode != HttpStatusCode.Redirect) return start;
         using var started = start;
         using var authorize = await identity.GetAsync(start.Headers.Location);
         if (authorize.StatusCode != HttpStatusCode.Redirect)
             return new HttpResponseMessage(authorize.StatusCode) { Content = new StringContent(await authorize.Content.ReadAsStringAsync()) };
-        return await browser.GetAsync(authorize.Headers.Location!.PathAndQuery);
+        return await browser.GetAsync(authorize.Headers.Location!);
     }
 
     internal static async Task<HttpResponseMessage> LogoutAsync(this HttpClient browser, bool nativeForm = false,
-        CancellationToken cancellationToken = default, string pathBase = "", string? returnUrl = null)
+        CancellationToken cancellationToken = default, string pathBase = "", string? returnUrl = null, Uri? origin = null)
     {
         var path = pathBase + OidcProxyRoutes.Logout;
         if (returnUrl is not null) path = QueryHelpers.AddQueryString(path, "returnUrl", returnUrl);
-        using var request = new HttpRequestMessage(HttpMethod.Post, path);
+        using var request = new HttpRequestMessage(HttpMethod.Post, origin is null ? path : new Uri(origin, path).AbsoluteUri);
         if (nativeForm)
         {
-            using var response = await browser.ApiAsync(pathBase + OidcProxyRoutes.Antiforgery, cancellationToken);
+            using var response = await browser.ApiAsync(origin is null ? pathBase + OidcProxyRoutes.Antiforgery : new Uri(origin, pathBase + OidcProxyRoutes.Antiforgery).AbsoluteUri, cancellationToken);
             var tokens = await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken);
             request.Content = new FormUrlEncodedContent(new Dictionary<string, string>
             {

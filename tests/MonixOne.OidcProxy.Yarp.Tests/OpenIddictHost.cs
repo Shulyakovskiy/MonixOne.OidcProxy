@@ -120,7 +120,7 @@ public sealed class OpenIddictHost(InfrastructureFixture infrastructure) : IAsyn
         Origin = new Uri(address);
     }
 
-    public async Task<string> RegisterClientAsync(bool publicClient = false)
+    public async Task<string> RegisterClientAsync(bool publicClient = false, Uri? origin = null, string pathBase = "")
     {
         var id = "spa-" + Guid.NewGuid().ToString("N"); // Isolates token/application state between tests.
         await using var scope = _app.Services.CreateAsyncScope();
@@ -130,8 +130,8 @@ public sealed class OpenIddictHost(InfrastructureFixture infrastructure) : IAsyn
             ClientSecret = publicClient ? null : Secret,
             ClientType = publicClient ? OpenIddictConstants.ClientTypes.Public : OpenIddictConstants.ClientTypes.Confidential,
             ConsentType = OpenIddictConstants.ConsentTypes.Implicit,
-            RedirectUris = { new Uri(BffApplicationFactory.Origin, "/.auth/login/callback") },
-            PostLogoutRedirectUris = { new Uri(BffApplicationFactory.Origin, "/.auth/signout-callback") },
+            RedirectUris = { new Uri(origin ?? BffApplicationFactory.Origin, pathBase + OidcProxyRoutes.LoginCallback) },
+            PostLogoutRedirectUris = { new Uri(origin ?? BffApplicationFactory.Origin, pathBase + OidcProxyRoutes.LogoutCallback) },
             Permissions =
             {
                 OpenIddictConstants.Permissions.Endpoints.Authorization, OpenIddictConstants.Permissions.Endpoints.Token,

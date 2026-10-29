@@ -11,9 +11,9 @@ namespace MonixOne.OidcProxy.Yarp.Sessions;
 /// the previously read value, so a late refresh cannot overwrite logout or newer tokens.
 /// Redis failures never fall back to an independent in-process session.
 /// </summary>
-internal sealed class SessionStore(ProxyOptions options, ConnectionMultiplexer connection, IDataProtectionProvider protection, TimeProvider timeProvider)
+internal sealed class SessionStore(BffClient client, ConnectionMultiplexer connection, IDataProtectionProvider protection, TimeProvider timeProvider)
 {
-    private readonly IDataProtector _protector = protection.CreateProtector("MonixOne.OidcProxy.Yarp.ServerSession.v6", options.CookieName);
+    private readonly IDataProtector _protector = protection.CreateProtector("MonixOne.OidcProxy.Yarp.ServerSession.v6", client.CookieName);
     private IDatabase Database => connection.GetDatabase();
 
     private const string CompareExchangeScript = """
@@ -32,10 +32,10 @@ internal sealed class SessionStore(ProxyOptions options, ConnectionMultiplexer c
         var id = RandomNumberGenerator.GetHexString(64);
         var state = new StoredSession(
             Convert.ToBase64String(TicketSerializer.Default.Serialize(ticket)),
-            now + options.SessionAbsoluteTimeout,
-            now + options.SessionIdleTimeout);
+            now + client.Options.SessionAbsoluteTimeout,
+            now + client.Options.SessionIdleTimeout);
         var value = Encode(state);
-        var key = options.RedisKeyPrefix + "sessions:" + id;
+        var key = client.RedisKeyPrefix + "sessions:" + id;
         if (!await Database.StringSetAsync(key, value, Lifetime(state), When.NotExists).WaitAsync(cancellationToken))
             throw new InvalidOperationException("Unable to allocate a unique server session.");
         return id;
@@ -47,7 +47,7 @@ internal sealed class SessionStore(ProxyOptions options, ConnectionMultiplexer c
     private async Task<SessionSnapshot?> ReadCoreAsync(string id, CancellationToken cancellationToken, int attemptsLeft)
     {
         if (!IsValidId(id)) return null;
-        var key = options.RedisKeyPrefix + "sessions:" + id;
+        var key = client.RedisKeyPrefix + "sessions:" + id;
         string? value = await Database.StringGetAsync(key).WaitAsync(cancellationToken);
         if (value is null) return null;
 
@@ -78,7 +78,7 @@ internal sealed class SessionStore(ProxyOptions options, ConnectionMultiplexer c
     internal Task<bool> CompareExchangeAsync(SessionSnapshot expected, StoredSession? updated, CancellationToken cancellationToken)
     {
         var lifetime = updated is null ? TimeSpan.Zero : Lifetime(updated);
-        return CompareExchangeRawAsync(options.RedisKeyPrefix + "sessions:" + expected.Id, expected.Value,
+        return CompareExchangeRawAsync(client.RedisKeyPrefix + "sessions:" + expected.Id, expected.Value,
             lifetime > TimeSpan.Zero && updated is not null ? Encode(updated) : null, lifetime, cancellationToken);
     }
 
@@ -95,14 +95,14 @@ internal sealed class SessionStore(ProxyOptions options, ConnectionMultiplexer c
     internal async Task RemoveAsync(string id, CancellationToken cancellationToken)
     {
         if (!IsValidId(id)) return;
-        var key = options.RedisKeyPrefix + "sessions:" + id;
+        var key = client.RedisKeyPrefix + "sessions:" + id;
         await Database.KeyDeleteAsync(key).WaitAsync(cancellationToken);
     }
 
     internal async Task<AuthenticationTicket?> TakeAsync(string id, CancellationToken cancellationToken)
     {
         if (!IsValidId(id)) return null;
-        var key = options.RedisKeyPrefix + "sessions:" + id;
+        var key = client.RedisKeyPrefix + "sessions:" + id;
         string? value = (string?)await Database.StringGetDeleteAsync(key).WaitAsync(cancellationToken);
         if (value is null) return null;
         try

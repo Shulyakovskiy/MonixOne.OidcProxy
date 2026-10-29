@@ -23,6 +23,7 @@ namespace MonixOne.OidcProxy.Yarp.Tests;
 internal sealed class OidcWireMock : IDisposable
 {
     internal const string ClientId = "test-bff";
+    internal string RegisteredClientId { get; }
     internal const string ClientSecret = "test-only-client-secret";
     private readonly InfrastructureFixture _infrastructure;
     private readonly ConcurrentDictionary<string, (string Nonce, string Challenge)> _codes = new();
@@ -48,9 +49,10 @@ internal sealed class OidcWireMock : IDisposable
     internal ConcurrentQueue<IRequestMessage> BackendRequests { get; } = new();
     internal int ActiveRefreshTokens => _refreshTokens.Count;
 
-    internal OidcWireMock(InfrastructureFixture infrastructure)
+    internal OidcWireMock(InfrastructureFixture infrastructure, string clientId = ClientId)
     {
         _infrastructure = infrastructure;
+        RegisteredClientId = clientId;
         var key = RSA.Create(2048);
         _keys.Add(key);
         _key = new RsaSecurityKey(key) { KeyId = "initial-key" };
@@ -116,7 +118,7 @@ internal sealed class OidcWireMock : IDisposable
     { BaseAddress = Origin };
 
     internal BffApplicationFactory CreateBff(string? keyNamespace = null, StackExchange.Redis.ConnectionMultiplexer? connection = null)
-        => new(_infrastructure, Origin, ClientId, ClientSecret, Origin, keyNamespace, connection);
+        => new(_infrastructure, Origin, RegisteredClientId, ClientSecret, Origin, keyNamespace, connection);
 
     internal void RotateSigningKey()
     {
@@ -130,7 +132,7 @@ internal sealed class OidcWireMock : IDisposable
     private async Task<IResponseMessage> ExchangeAsync(IRequestMessage request)
     {
         var form = QueryHelpers.ParseQuery(request.Body ?? string.Empty);
-        if (form["client_id"] != ClientId || form["client_secret"] != ClientSecret)
+        if (form["client_id"] != RegisteredClientId || form["client_secret"] != ClientSecret)
             return Json(new { error = "invalid_client" }, 400);
         var refreshing = form["grant_type"] == "refresh_token";
         string? nonce;
@@ -183,7 +185,7 @@ internal sealed class OidcWireMock : IDisposable
         => new JsonWebTokenHandler().CreateToken(new SecurityTokenDescriptor
         {
             Issuer = InvalidIdToken == "issuer" ? "https://wrong.example" : Origin.AbsoluteUri.TrimEnd('/'),
-            Audience = InvalidIdToken == "audience" ? "wrong-client" : ClientId,
+            Audience = InvalidIdToken == "audience" ? "wrong-client" : RegisteredClientId,
             Subject = new ClaimsIdentity([new Claim("sub", InvalidIdToken == "subject" ? "other-user" : "user-1"),
                 new Claim("nonce", InvalidIdToken == "nonce" ? "wrong-nonce" : nonce)]),
             Expires = InvalidIdToken == "expired" ? DateTime.UtcNow.AddMinutes(-10) : DateTime.UtcNow.AddHours(1),

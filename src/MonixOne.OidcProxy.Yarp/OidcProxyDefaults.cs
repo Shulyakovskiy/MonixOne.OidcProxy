@@ -1,17 +1,14 @@
 namespace MonixOne.OidcProxy.Yarp;
 
-/// <summary>
-/// Identifies the standard named authentication options registered by the BFF.
-/// </summary>
+/// <summary>Names used by standard ASP.NET Core authentication and YARP metadata.</summary>
 public static class OidcProxyDefaults
 {
-    /// <summary>
-    /// The ASP.NET Core authentication scheme for the server session cookie.
-    /// </summary>
-    public const string CookieScheme = "MonixOne.OidcProxy.Yarp";
-
-    /// <summary>
-    /// The ASP.NET Core authentication scheme for the confidential OIDC client.
-    /// </summary>
-    public const string OpenIdConnectScheme = "MonixOne.OidcProxy.Yarp.OpenIdConnect";
+    /// <summary>The YARP route metadata key identifying a registered BFF client.</summary>
+    public const string ClientMetadataKey = "OidcProxy.Client";
+    /// <summary>Returns the named cookie authentication scheme for a client.</summary>
+    public static string CookieScheme(string clientName) => $"MonixOne.OidcProxy.Yarp.{clientName}.Cookie";
+    /// <summary>Returns the named OIDC authentication scheme for a client.</summary>
+    public static string OpenIdConnectScheme(string clientName) => $"MonixOne.OidcProxy.Yarp.{clientName}.OpenIdConnect";
+    /// <summary>Returns the host-only session cookie name for a client.</summary>
+    public static string CookieName(string clientName) => $"__Host-Http-oidcproxy.{clientName}.session";
 }

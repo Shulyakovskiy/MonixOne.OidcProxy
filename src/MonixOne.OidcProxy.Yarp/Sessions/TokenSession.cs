@@ -13,7 +13,7 @@ using Microsoft.IdentityModel.Tokens;
 
 namespace MonixOne.OidcProxy.Yarp.Sessions;
 
-internal sealed class TokenSession(SessionStore store, ProxyOptions options,
+internal sealed class TokenSession(SessionStore store, BffClient client,
     IOptionsMonitor<OpenIdConnectOptions> oidcOptions, TimeProvider timeProvider,
     IHostApplicationLifetime applicationLifetime, ILogger<TokenSession> logger)
 {
@@ -35,7 +35,7 @@ internal sealed class TokenSession(SessionStore store, ProxyOptions options,
                     if (await store.CompareExchangeAsync(snapshot, null, cancellationToken)) return null;
                     continue;
                 }
-                if (timeProvider.GetElapsedTime(waitStarted) >= options.RefreshTimeout)
+                if (timeProvider.GetElapsedTime(waitStarted) >= client.Options.RefreshTimeout)
                     throw new SessionUnavailableException("Another request is still refreshing this session.");
                 await Task.Delay(TimeSpan.FromMilliseconds(25), timeProvider, cancellationToken);
                 continue;
@@ -48,12 +48,12 @@ internal sealed class TokenSession(SessionStore store, ProxyOptions options,
                 if (await store.CompareExchangeAsync(snapshot, null, cancellationToken)) return null;
                 continue;
             }
-            if (expiresAt > now + options.RefreshBeforeExpiration)
+            if (expiresAt > now + client.Options.RefreshBeforeExpiration)
             {
-                if (snapshot.State.IdleExpiresAt - now < options.SessionIdleTimeout / 2)
+                if (snapshot.State.IdleExpiresAt - now < client.Options.SessionIdleTimeout / 2)
                 {
                     if (!await store.CompareExchangeAsync(snapshot,
-                            snapshot.State with { IdleExpiresAt = now + options.SessionIdleTimeout }, cancellationToken))
+                            snapshot.State with { IdleExpiresAt = now + client.Options.SessionIdleTimeout }, cancellationToken))
                         continue;
                 }
                 return ticket;
@@ -72,13 +72,13 @@ internal sealed class TokenSession(SessionStore store, ProxyOptions options,
             var claimed = snapshot.State with
             {
                 RefreshOperation = operation,
-                RefreshDeadline = now + options.RefreshTimeout
+                RefreshDeadline = now + client.Options.RefreshTimeout
             };
             if (!await store.CompareExchangeAsync(snapshot, claimed, cancellationToken)) continue;
 
             // Once claimed, caller disconnection must not interrupt persisting a rotated token.
             using var ownerTimeout = CancellationTokenSource.CreateLinkedTokenSource(applicationLifetime.ApplicationStopping);
-            ownerTimeout.CancelAfter(options.RefreshTimeout);
+            ownerTimeout.CancelAfter(client.Options.RefreshTimeout);
             AuthenticationTicket updated;
             try
             {
@@ -106,7 +106,7 @@ internal sealed class TokenSession(SessionStore store, ProxyOptions options,
                     var completed = latest.State with
                     {
                         Ticket = Convert.ToBase64String(TicketSerializer.Default.Serialize(updated)),
-                        IdleExpiresAt = timeProvider.GetUtcNow() + options.SessionIdleTimeout,
+                        IdleExpiresAt = timeProvider.GetUtcNow() + client.Options.SessionIdleTimeout,
                         RefreshOperation = null,
                         RefreshDeadline = null
                     };
@@ -126,7 +126,7 @@ internal sealed class TokenSession(SessionStore store, ProxyOptions options,
 
     private async Task<AuthenticationTicket> RefreshAsync(AuthenticationTicket previous, string refreshToken, CancellationToken ct)
     {
-        var oidc = oidcOptions.Get(OidcProxyDefaults.OpenIdConnectScheme);
+        var oidc = oidcOptions.Get(client.OpenIdConnectScheme);
         var configuration = await oidc.ConfigurationManager!.GetConfigurationAsync(ct);
         if (string.IsNullOrEmpty(configuration.TokenEndpoint))
             throw new SessionUnavailableException("The identity provider has no token endpoint.");
@@ -219,7 +219,7 @@ internal sealed class TokenSession(SessionStore store, ProxyOptions options,
             if (!string.IsNullOrEmpty(response.RefreshToken)) tokens["refresh_token"] = response.RefreshToken;
             if (!string.IsNullOrEmpty(response.IdentityToken)) tokens["id_token"] = response.IdentityToken;
             previous.Properties.StoreTokens(tokens.Select(t => new AuthenticationToken { Name = t.Key, Value = t.Value }));
-            return new AuthenticationTicket(principal, previous.Properties, OidcProxyDefaults.CookieScheme);
+            return new AuthenticationTicket(principal, previous.Properties, client.CookieScheme);
         }
         catch
         {
@@ -230,7 +230,7 @@ internal sealed class TokenSession(SessionStore store, ProxyOptions options,
             {
                 Name = "refresh_token", Value = response.RefreshToken ?? refreshToken
             }]);
-            await RevokeAsync(new AuthenticationTicket(previous.Principal, rejected, OidcProxyDefaults.CookieScheme), CancellationToken.None);
+            await RevokeAsync(new AuthenticationTicket(previous.Principal, rejected, client.CookieScheme), CancellationToken.None);
             throw;
         }
     }
@@ -261,7 +261,7 @@ internal sealed class TokenSession(SessionStore store, ProxyOptions options,
         timeout.CancelAfter(TimeSpan.FromSeconds(5));
         try
         {
-            var oidc = oidcOptions.Get(OidcProxyDefaults.OpenIdConnectScheme);
+            var oidc = oidcOptions.Get(client.OpenIdConnectScheme);
             var configuration = await oidc.ConfigurationManager!.GetConfigurationAsync(timeout.Token);
             var endpoint = configuration.RevocationEndpoint;
             if (string.IsNullOrEmpty(endpoint)) return;

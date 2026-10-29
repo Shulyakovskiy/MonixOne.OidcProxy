@@ -15,8 +15,15 @@ internal static class BffEndpoints
 {
     internal static void Map(WebApplication app)
     {
-        var options = app.Services.GetRequiredService<ProxyOptions>();
-        app.MapGet(OidcProxyRoutes.Login, async (HttpContext context) =>
+        foreach (var client in app.Services.GetRequiredService<BffClients>().ByName.Values)
+            MapClient(app, client);
+    }
+
+    private static void MapClient(WebApplication app, BffClient client)
+    {
+        var options = client.Options;
+        var routes = app.MapGroup(string.Empty).RequireHost(options.PublicOrigin!.Authority).WithMetadata(client);
+        routes.MapGet(OidcProxyRoutes.Login, async (HttpContext context) =>
         {
             var returnUrl = GetReturnUrl(context, options);
             if (returnUrl is null) return Results.BadRequest();
@@ -24,35 +31,35 @@ internal static class BffEndpoints
             {
                 RedirectUri = returnUrl
             };
-            var previous = await context.AuthenticateAsync(OidcProxyDefaults.CookieScheme);
+            var previous = await context.AuthenticateAsync(client.CookieScheme);
             if (context.Items.ContainsKey(typeof(SessionUnavailableException)))
                 return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
             // A cross-site callback will not carry the Strict session cookie.
             // AuthenticationProperties are protected by the framework OIDC state.
             if (previous.Principal?.FindFirstValue(BffConstants.SessionClaim) is { } previousId)
                 properties.Items[BffConstants.PreviousSession] = previousId;
-            return Results.Challenge(properties, [OidcProxyDefaults.OpenIdConnectScheme]);
+            return Results.Challenge(properties, [client.OpenIdConnectScheme]);
         }).AllowAnonymous();
 
-        app.MapGet(OidcProxyRoutes.User, (HttpContext context) =>
+        routes.MapGet(OidcProxyRoutes.User, (HttpContext context) =>
             Results.Json(context.User.Claims.Where(c => c.Type != BffConstants.SessionClaim)
                 .GroupBy(c => c.Type).ToDictionary(g => g.Key, g => g.Select(c => c.Value).ToArray())))
             .RequireAuthorization(BffConstants.AuthorizationPolicy).WithMetadata(BffConstants.ApiMetadata);
 
-        app.MapGet(OidcProxyRoutes.Antiforgery, (HttpContext context, IAntiforgery antiforgery) =>
+        routes.MapGet(OidcProxyRoutes.Antiforgery, (HttpContext context, IAntiforgery antiforgery) =>
         {
             var tokens = antiforgery.GetAndStoreTokens(context);
             return Results.Json(new { tokens.RequestToken, tokens.FormFieldName });
         }).RequireAuthorization(BffConstants.AuthorizationPolicy).WithMetadata(BffConstants.ApiMetadata);
 
         // Prevent a host SPA fallback from treating a logout link as a page.
-        app.MapMethods(OidcProxyRoutes.Logout, [HttpMethods.Get, HttpMethods.Head], (HttpResponse response) =>
+        routes.MapMethods(OidcProxyRoutes.Logout, [HttpMethods.Get, HttpMethods.Head], (HttpResponse response) =>
         {
             response.Headers.Allow = HttpMethods.Post;
             return Results.StatusCode(StatusCodes.Status405MethodNotAllowed);
         }).AllowAnonymous();
 
-        app.MapPost(OidcProxyRoutes.Logout, async (HttpContext context, SessionStore store, TokenSession tokens) =>
+        routes.MapPost(OidcProxyRoutes.Logout, async (HttpContext context) =>
         {
             var returnUrl = GetReturnUrl(context, options);
             if (returnUrl is null) return Results.BadRequest();
@@ -61,8 +68,10 @@ internal static class BffEndpoints
             // its local invalidation. GETDEL returns the tokens current at deletion,
             // including a refresh that committed after authentication of this request.
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var store = context.RequestServices.GetRequiredKeyedService<SessionStore>(client.Name);
+            var tokens = context.RequestServices.GetRequiredKeyedService<TokenSession>(client.Name);
             var ticket = await store.TakeAsync(id, timeout.Token);
-            await context.SignOutAsync(OidcProxyDefaults.CookieScheme);
+            await context.SignOutAsync(client.CookieScheme);
             if (ticket is not null)
             {
                 context.Items[BffConstants.LogoutIdTokenItem] = ticket.Properties.GetTokenValue("id_token");
@@ -71,12 +80,12 @@ internal static class BffEndpoints
             return Results.SignOut(new AuthenticationProperties
             {
                 RedirectUri = returnUrl
-            }, [OidcProxyDefaults.OpenIdConnectScheme]);
+            }, [client.OpenIdConnectScheme]);
         }).RequireAuthorization(BffConstants.AuthorizationPolicy).WithMetadata(BffConstants.ApiMetadata);
 
     }
 
-    private static string? GetReturnUrl(HttpContext context, ProxyOptions options)
+    private static string? GetReturnUrl(HttpContext context, OidcProxyClientOptions options)
     {
         var values = context.Request.Query[CookieAuthenticationDefaults.ReturnUrlParameter];
         if (values.Count == 0)

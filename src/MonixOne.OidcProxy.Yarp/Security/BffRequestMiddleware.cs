@@ -1,6 +1,8 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Antiforgery;
+using Microsoft.AspNetCore.Authorization;
+using Yarp.ReverseProxy.Model;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -25,13 +27,44 @@ internal sealed class BffRequestMiddleware(RequestDelegate next)
         });
     }
 
-    public async Task InvokeAsync(HttpContext context, ProxyOptions options)
+    public async Task InvokeAsync(HttpContext context, BffClients clients)
     {
-        if (context.GetEndpoint()?.Metadata.Contains(BffConstants.ApiMetadata) != true)
+        var endpoint = context.GetEndpoint();
+        var client = endpoint?.Metadata.GetMetadata<BffClient>();
+        var route = endpoint?.Metadata.GetMetadata<RouteModel>()?.Config;
+        if (route is not null)
+        {
+            if (route.Metadata?.TryGetValue(OidcProxyDefaults.ClientMetadataKey, out var name) == true)
+                clients.ByName.TryGetValue(name, out client);
+            if (client is null)
+            {
+                if (clients.Find(context.Request) is not null)
+                {
+                    context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                    return;
+                }
+                await next(context);
+                return;
+            }
+        }
+        if (client is null || route is null && endpoint?.Metadata.Contains(BffConstants.ApiMetadata) != true)
         {
             await next(context);
             return;
         }
+        if (!client.Matches(context.Request))
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            return;
+        }
+        // Explicit anonymous YARP routes serve assets/public data without a session.
+        // Managed-route transforms still remove browser credentials and never attach tokens.
+        if (route is not null && endpoint?.Metadata.GetMetadata<IAllowAnonymous>() is not null)
+        {
+            await next(context);
+            return;
+        }
+        var options = client.Options;
         context.Response.Headers.CacheControl = "no-store";
         context.Response.OnStarting(() =>
         {
@@ -47,7 +80,7 @@ internal sealed class BffRequestMiddleware(RequestDelegate next)
             return;
         }
         // A principal established by another host middleware/scheme is not a BFF session.
-        var authentication = await context.AuthenticateAsync(OidcProxyDefaults.CookieScheme);
+        var authentication = await context.AuthenticateAsync(client.CookieScheme);
         context.User = authentication.Principal ?? new ClaimsPrincipal(new ClaimsIdentity());
         if (context.Items.ContainsKey(typeof(SessionUnavailableException)))
         {
@@ -84,11 +117,11 @@ internal sealed class BffRequestMiddleware(RequestDelegate next)
             if (id is not null && context.Request.Path != OidcProxyRoutes.Logout &&
                 context.Request.Path != OidcProxyRoutes.Antiforgery)
             {
-                var ticket = await context.RequestServices.GetRequiredService<TokenSession>()
+                var ticket = await context.RequestServices.GetRequiredKeyedService<TokenSession>(client.Name)
                     .GetActiveTicketAsync(id, context.RequestAborted);
                 if (ticket is null)
                 {
-                    await context.SignOutAsync(OidcProxyDefaults.CookieScheme);
+                    await context.SignOutAsync(client.CookieScheme);
                     context.Response.StatusCode = StatusCodes.Status401Unauthorized;
                     return;
                 }
@@ -100,7 +133,7 @@ internal sealed class BffRequestMiddleware(RequestDelegate next)
             context.Features.Set<IAuthenticateResultFeature>(new BffAuthenticateResultFeature
             {
                 AuthenticateResult = AuthenticateResult.Success(new AuthenticationTicket(
-                    context.User, authentication.Properties!, OidcProxyDefaults.CookieScheme))
+                    context.User, authentication.Properties!, client.CookieScheme))
             });
             await next(context);
         }

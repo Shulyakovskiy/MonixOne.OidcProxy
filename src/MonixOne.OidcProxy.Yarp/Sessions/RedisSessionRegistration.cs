@@ -12,15 +12,13 @@ internal static class RedisSessionRegistration
     internal static void Register(IServiceCollection services)
     {
         services.TryAddSingleton(TimeProvider.System);
-        services.AddSingleton<SessionStore>();
-        services.AddSingleton<TokenSession>();
         services.AddDataProtection();
-        services.AddOptions<DataProtectionOptions>().Configure<ProxyOptions>((protection, options) =>
+        services.AddOptions<DataProtectionOptions>().Configure<Microsoft.Extensions.Options.IOptions<ProxyOptions>>((protection, host) =>
             protection.ApplicationDiscriminator =
-                $"MonixOne.OidcProxy.Yarp.v6:{options.CookieName}:{options.RedisKeyPrefix}");
+                $"MonixOne.OidcProxy.Yarp.v6:{host.Value.RedisKeyPrefix}");
         services.AddOptions<KeyManagementOptions>()
-            .Configure<ConnectionMultiplexer, ProxyOptions>((keys, connection, options) =>
+            .Configure<ConnectionMultiplexer, Microsoft.Extensions.Options.IOptions<ProxyOptions>>((keys, connection, host) =>
                 keys.XmlRepository = new RedisXmlRepository(() => connection.GetDatabase(),
-                    options.RedisKeyPrefix + "data-protection"));
+                    host.Value.RedisKeyPrefix + "data-protection"));
     }
 }

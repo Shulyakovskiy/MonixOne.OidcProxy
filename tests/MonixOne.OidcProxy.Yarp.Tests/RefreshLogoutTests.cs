@@ -59,7 +59,7 @@ public sealed class RefreshLogoutTests(InfrastructureFixture infrastructure)
         using var replica = second.CreateBrowser(handleCookies: false);
         using var identityBrowser = identity.CreateIdentityBrowser();
         using var login = await browser.LoginAsync(identityBrowser);
-        var cookie = login.Headers.GetValues("Set-Cookie").Single(value => value.StartsWith("__Host-Http-oidcproxy.session=")).Split(';')[0];
+        var cookie = login.Headers.GetValues("Set-Cookie").Single(value => value.StartsWith("__Host-Http-oidcproxy.spa.session=")).Split(';')[0];
         replica.DefaultRequestHeaders.Add("Cookie", cookie);
         first.Clock.Advance(TimeSpan.FromSeconds(100));
         second.Clock.Advance(TimeSpan.FromSeconds(100));

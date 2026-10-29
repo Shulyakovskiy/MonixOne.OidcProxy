@@ -21,7 +21,7 @@ public sealed class SpaBoundaryTests(InfrastructureFixture infrastructure)
         // Assert
         login.StatusCode.ShouldBe(HttpStatusCode.Redirect);
         login.Headers.Location!.OriginalString.ShouldBe("/");
-        var cookie = login.Headers.GetValues("Set-Cookie").Single(value => value.StartsWith("__Host-Http-oidcproxy.session="));
+        var cookie = login.Headers.GetValues("Set-Cookie").Single(value => value.StartsWith("__Host-Http-oidcproxy.spa.session="));
         cookie.ShouldContain("secure", Case.Insensitive);
         cookie.ShouldContain("httponly", Case.Insensitive);
         cookie.ShouldContain("samesite=strict", Case.Insensitive);
@@ -129,7 +129,7 @@ public sealed class SpaBoundaryTests(InfrastructureFixture infrastructure)
         using var replay = host.CreateBrowser(handleCookies: false);
         using var identityBrowser = identity.CreateIdentityBrowser();
         using var first = await browser.LoginAsync(identityBrowser);
-        var previousCookie = first.Headers.GetValues("Set-Cookie").Single(value => value.StartsWith("__Host-Http-oidcproxy.session=")).Split(';')[0];
+        var previousCookie = first.Headers.GetValues("Set-Cookie").Single(value => value.StartsWith("__Host-Http-oidcproxy.spa.session=")).Split(';')[0];
 
         // Act
         using var second = await browser.LoginAsync(identityBrowser);
@@ -161,7 +161,7 @@ public sealed class SpaBoundaryTests(InfrastructureFixture infrastructure)
         using var identityBrowser = identity.CreateIdentityBrowser();
         using var original = await browser.LoginAsync(identityBrowser);
         var originalCookie = original.Headers.GetValues("Set-Cookie")
-            .Single(value => value.StartsWith("__Host-Http-oidcproxy.session=")).Split(';')[0];
+            .Single(value => value.StartsWith("__Host-Http-oidcproxy.spa.session=")).Split(';')[0];
         using var start = await browser.GetAsync(OidcProxyRoutes.Login, ct);
         using var authorization = await identityBrowser.GetAsync(start.Headers.Location, ct);
         callbackBrowser.DefaultRequestHeaders.Add("Cookie", string.Join("; ",
