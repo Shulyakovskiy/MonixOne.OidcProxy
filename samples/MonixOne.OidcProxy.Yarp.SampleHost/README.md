@@ -33,8 +33,15 @@ corepack pnpm docs:dev
 В `appsettings.json` замените example authority/client ID/адрес API, а credentials передайте через secret provider:
 
 - `ConnectionStrings__Redis` — конфигурация host-owned ConnectionMultiplexer;
+- `Bff__EncryptionKey` — сильный случайный секрет для прямого JWE-шифрования сессий (`openssl rand -base64 32`); сохраните его между рестартами и используйте одинаковый на всех репликах;
 - `Bff__Clients__spa__OpenIdConnect__ClientSecret` — secret confidential web client;
 - `ASPNETCORE_ENVIRONMENT` — область Redis для окружения.
+
+Сессии шифруются напрямую через `jose-jwt` (PBES2-HS256+A128KW, A256GCM).
+Data Protection остаётся только для cookie/OIDC state/antiforgery; зашифрованный framework key ring хранится в Redis.
+Общий каталог не нужен. Пустой `Bff__EncryptionKey` блокирует запуск.
+Переход со старого формата и замена секрета требуют нового namespace и повторного входа:
+см. [сессии, шифрование и Redis](../../docs/SESSIONS.md).
 
 ### Вариант 1: одна production-подобная точка входа
 

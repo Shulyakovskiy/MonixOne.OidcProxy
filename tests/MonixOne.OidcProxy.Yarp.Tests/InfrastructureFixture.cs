@@ -22,6 +22,7 @@ public sealed class InfrastructureFixture : IAsyncLifetime
     public PostgreSqlContainer PostgreSql { get; } = new PostgreSqlBuilder("postgres:17-alpine").Build();
     public ConnectionMultiplexer Connection { get; private set; } = null!;
     public X509Certificate2 Certificate { get; }
+    public string EncryptionKey { get; } = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
 
     public InfrastructureFixture()
     {

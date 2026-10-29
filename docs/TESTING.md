@@ -104,6 +104,18 @@ dotnet tests/MonixOne.OidcProxy.Yarp.Tests/bin/Release/net10.0/MonixOne.OidcProx
 
 ### Redis, lifetime и прикладные cookies
 
+`EncryptionKeyTests`:
+
+- Прямую расшифровку JSON сессии из Redis через стандартный jose-jwt, без Data Protection API.
+- Обязательный секрет, PBES2-HS256+A128KW и A256GCM.
+- Зашифрованный framework key ring в Redis и работу после рестарта без общего каталога.
+- Отклонение повреждённого JWE, другого ключа, неверного JSON и отсутствующей привязки к Redis key.
+- Отклонение переноса JWE в другую сессию, клиент или namespace без повреждения исходной сессии.
+- Отказ запуска при открытых legacy framework keys.
+
+Контракт хранения описан в [SESSIONS.md](SESSIONS.md).
+`PreparedConfigurationTests` проверяют также неизменность ключа после reload конфигурации.
+
 `RedisMutationTests`:
 
 - RESP gate задерживает ответ после исполнения команды настоящим Redis.
@@ -119,7 +131,7 @@ dotnet tests/MonixOne.OidcProxy.Yarp.Tests/bin/Release/net10.0/MonixOne.OidcProx
 - Активность при refresh через прежнюю границу idle.
 - Absolute timeout и snapshot, истёкший после cookie validation.
 - Access tokens на 10, 30 и 120 секунд.
-- Чтение прежнего v6 record без RefreshAt.
+- Вычисление порога для JWE-сессии без optional поля RefreshAt.
 
 `SessionBoundaryTests`:
 

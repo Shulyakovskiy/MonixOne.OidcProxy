@@ -165,21 +165,23 @@ Scope list из конфигурации заменяет framework defaults: з
 ```text
 ASPNETCORE_ENVIRONMENT=Development
 ConnectionStrings__Redis=<Redis connection with TLS/authentication>
+Bff__EncryptionKey=<strong random PBES2 password from secret provider>
 Bff__Clients__adminidentity__OpenIdConnect__ClientSecret=<confidential client secret>
 Kestrel__Certificates__Default__Path=/run/secrets/bff-tls.pfx
 Kestrel__Certificates__Default__Password=<TLS PFX password>
-DataProtection__CertificatePath=/run/secrets/bff-data-protection.pfx
-DataProtection__CertificatePassword=<DP PFX password>
 ReverseProxy__Clusters__admin-backend__Destinations__primary__Address=<real HTTPS backend endpoint>
 ```
 
 Это имена параметров, не готовый shell-файл со значениями.
 Переменные VITE_* для secrets не используйте.
 
-Все реплики BFF должны иметь общий Redis scope и доступ к одним DP decryption keys.
-DP-сертификат защищает master keys в Redis; TLS сертификат обслуживает listener, это разные назначения.
-
-Sample поддерживает `DataProtection:CertificatePath/CertificatePassword` через стандартный ProtectKeysWithCertificate.
+Все реплики BFF должны иметь общий Redis scope и одинаковый `Bff:EncryptionKey`.
+Ключ генерируется один раз (`openssl rand -base64 32`) и сохраняется между redeploy.
+Данные сессий шифруются напрямую через `jose-jwt` JWT.Encode/JWT.Decrypt с PBES2-HS256+A128KW и A256GCM.
+Data Protection используется для стандартных cookie/OIDC state/antiforgery; его зашифрованный key ring тоже находится в Redis.
+Общий каталог не нужен. TLS сертификат обслуживает HTTPS listener.
+Отсутствующий секрет и открытый legacy framework key ring блокируют запуск; повреждённая JWE-сессия отклоняется с 401.
+Порядок перехода с прежнего формата сессий, замены секрета и восстановления Redis описан в [SESSIONS.md](SESSIONS.md).
 
 Для локального запуска sample с этим профилем задайте отдельный content root, чтобы не смешивать его с sample client `spa`:
 
@@ -191,7 +193,7 @@ dotnet run --project samples/MonixOne.OidcProxy.Yarp.SampleHost --no-launch-prof
 Сначала заполните реальные upstream URLs, сертификаты и секреты.
 Sample здесь проксирует admin SPA через YARP; его собственный React build не используется.
 
-Redis sessions получают scope `br-spa-gateway:development:bff:adminidentity:`, DP key ring — общий для клиентов этого gateway.
+Redis sessions получают scope `br-spa-gateway:development:bff:adminidentity:`, framework key ring — общий для клиентов этого gateway.
 В других окружениях задайте соответствующий environment и отдельные credentials.
 
 ---
@@ -297,7 +299,7 @@ Logout Identity отзывает grants subject в tenant, поэтому вых
 
 ## Шаг 8. Проведите приёмку до переключения трафика
 
-1. Проверьте DNS, CA/SAN, Redis, DP keys и доступ к upstream из сети BFF.
+1. Проверьте DNS, CA/SAN, Redis, общий EncryptionKey/framework key ring и доступ к upstream из сети BFF.
    Запуск должен отклонять неизвестные clients/policies и небезопасные BFF destinations.
 2. Проверьте первый вход без Identity cookie, повторный login и local returnUrl в `/admin/`.
    Для первого входа необходим provider login UI.

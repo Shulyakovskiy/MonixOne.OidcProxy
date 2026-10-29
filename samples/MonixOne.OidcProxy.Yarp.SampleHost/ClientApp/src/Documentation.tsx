@@ -371,15 +371,18 @@ export default function Documentation() {
                     label="Префикс Redis"
                     value={`${setup.application.toLowerCase()}:${setup.environment.toLowerCase()}:${setup.namespace.toLowerCase()}:${setup.name}:sessions:`}
                   />
+                  <h3>Серверные сессии</h3>
                   <p>
-                    Пакет использует Redis для защищённых session tickets и
-                    общего Data Protection key ring. Поддерживаются Redis 6.2+
+                    JSON сессии с ticket и OAuth-токенами шифруется напрямую
+                    через jose-jwt: PBES2-HS256+A128KW и A256GCM, ключ из
+                    Bff:EncryptionKey. В Redis хранится JWE. Data Protection для
+                    данных сессии не используется. Поддерживаются Redis 6.2+
                     команды GETDEL и Lua CAS. Memory fallback отсутствует:
                     потеря Redis приводит к отказу авторизации.
                   </p>
                   <Code
                     label="Настройки через secret provider / environment"
-                    value={`ASPNETCORE_ENVIRONMENT=${setup.environment}\nConnectionStrings__Redis=<set through your secret provider>\n${[setup, ...others].map((client) => `Bff__Clients__${client.name}__OpenIdConnect__ClientSecret=<set through your secret provider>`).join("\n")}`}
+                    value={`ASPNETCORE_ENVIRONMENT=${setup.environment}\nConnectionStrings__Redis=<set through your secret provider>\nBff__EncryptionKey=<strong random PBES2 password from secret provider>\n${[setup, ...others].map((client) => `Bff__Clients__${client.name}__OpenIdConnect__ClientSecret=<set through your secret provider>`).join("\n")}`}
                   />
                   <p className="doc-note">
                     Не помещайте секреты в VITE_* или bundle SPA. Redis требует
@@ -389,19 +392,26 @@ export default function Documentation() {
                     сессию.
                   </p>
                   <details>
-                    <summary>Data Protection и восстановление Redis</summary>
+                    <summary>Framework cookies, реплики и восстановление Redis</summary>
                     <p>
-                      Шифрование ticket не защищает от полного доступа к Redis,
-                      если в нём же хранится незащищённый master key ring. Хост
-                      должен добавить стандартную защиту Data Protection keys
-                      независимым сертификатом или KMS, например через{" "}
-                      <code>
-                        AddDataProtection().ProtectKeysWithCertificate(certificate)
-                      </code>
-                      .{" "}
+                      Обязательный <code>Bff:EncryptionKey</code> шифрует сами
+                      данные сессии. Сгенерируйте сильный случайный секрет один раз через{" "}
+                      <code>openssl rand -base64 32</code> и сохраните в secret
+                      provider отдельно от Redis.
                     </p>
                     <p>
-                      Все реплики должны уметь расшифровывать один key ring.
+                      Стандартные cookies, OIDC state и antiforgery используют
+                      Data Protection. Его общий key ring также хранится в Redis,
+                      зашифрованный тем же конфигурационным секретом через jose-jwt.
+                      Общий каталог не нужен.
+                    </p>
+                    <p>
+                      Все реплики используют одинаковый секрет между рестартами.
+                      Пустой секрет или открытый legacy framework key ring
+                      блокируют запуск. Повреждённая JWE-сессия отклоняется с 401.
+                      Для перехода со старого формата или замены секрета остановите
+                      реплики, смените KeyNamespace и удалите старую область Redis;
+                      пользователям потребуется повторный вход.
                     </p>
                     <p>
                       При восстановлении backup учитывайте, что он может вернуть
@@ -603,7 +613,7 @@ export default function Documentation() {
                       "После logout старые cookie дают 401; UI очищает данные пользователя.",
                       "Два SPA-хоста используют разные client_id/cookies; перенесённые cookie/state не авторизуют другого клиента. Logout и refresh локально изолированы; проверьте также глобальную SSO-политику IdP.",
                       "При недоступности Redis BFF возвращает 503; токены, cookies, codes и client secret не попадают в логи.",
-                      "Ingress доверяет только настроенным proxies; DP key ring защищён независимым сертификатом/KMS.",
+                      "Ingress доверяет только настроенным proxies; Bff:EncryptionKey хранится отдельно от Redis и одинаков на репликах.",
                     ].map((item) => (
                       <label key={item}>
                         <input type="checkbox" />

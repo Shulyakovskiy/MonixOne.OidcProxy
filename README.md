@@ -13,7 +13,19 @@ BFF для SPA на **.NET 10 LTS**, ASP.NET Core OpenID Connect, **YARP** и Re
 
 Сервисов приложения, authorization server или UI входа пакет не реализует.
 
-Руководства: [проверки](docs/TESTING.md), [подключение BR.Admin-Identity по шагам](docs/BR-ADMIN-IDENTITY.md), [cookies сторонних приложений](docs/COOKIES.md).
+Версия **7.0.0** требует `Bff:EncryptionKey` и использует новый JWE-формат серверных сессий.
+При обновлении с 6.x выполните [переход в новый namespace](docs/SESSIONS.md#6-переход-замена-секрета-и-backup);
+пользователи должны войти заново.
+
+## Документация
+
+| Раздел | Содержание |
+| --- | --- |
+| [Настройка BFF](#пошаговая-настройка) | IdP, конфигурация, host/YARP и SPA |
+| [Сессии и шифрование](docs/SESSIONS.md) | Прямое JWE-шифрование сессий, framework key ring в Redis, реплики и замена секрета |
+| [Cookies приложений](docs/COOKIES.md) | Opt-in политики для backend cookies и OAuth callbacks |
+| [BR.Admin-Identity](docs/BR-ADMIN-IDENTITY.md) | Профиль настройки и переход существующей админки |
+| [Проверки](docs/TESTING.md) | Интеграционные тесты, frontend, сборка и package |
 
 ---
 
@@ -161,7 +173,7 @@ dotnet pack src/MonixOne.OidcProxy.Yarp/MonixOne.OidcProxy.Yarp.csproj -c Releas
 }
 ```
 
-`Bff__Clients__portal__OpenIdConnect__ClientSecret`, `Bff__Clients__workspace__OpenIdConnect__ClientSecret` и `ConnectionStrings__Redis` передавайте через secret provider/environment.
+`Bff__Clients__portal__OpenIdConnect__ClientSecret`, `Bff__Clients__workspace__OpenIdConnect__ClientSecret`, `Bff__EncryptionKey` и `ConnectionStrings__Redis` передавайте через secret provider/environment.
 `ASPNETCORE_ENVIRONMENT` задаёт environment-сегмент Redis.
 
 Секретов в `VITE_*`, SPA bundle или исходниках быть не должно.
@@ -248,23 +260,23 @@ Request/response logging и трассировка также должны ис�
 Один host-owned `ConnectionMultiplexer` используется через DI.
 Требуется Redis 6.2+ с GETDEL и Lua.
 
-Общий Data Protection key ring: `{application}:{environment}:{namespace}:data-protection`; sessions: `{application}:{environment}:{namespace}:{clientName}:sessions:{id}`.
-Имена clients уникальны, lowercase ASCII.
+| Что хранится | Как защищается | Redis key |
+| --- | --- | --- |
+| JSON серверной сессии с ticket и токенами | Напрямую `jose-jwt`, PBES2-HS256+A128KW + A256GCM, ключ `Bff:EncryptionKey` | `{application}:{environment}:{namespace}:{client}:sessions:{id}` |
+| Framework key ring для cookie/OIDC state/antiforgery | Ключи защищены тем же конфигурационным секретом через `jose-jwt` | `{application}:{environment}:{namespace}:data-protection` |
 
-Сегменты application/environment/namespace нормализуются в lowercase.
-Реплики одного BFF используют одинаковые значения; независимые приложения и окружения — разные.
+Data Protection для данных сессии не используется. Его стандартные механизмы остаются для browser cookie,
+OIDC state и antiforgery. Всё общее состояние хранится в Redis; общий каталог не нужен.
 
-В Redis хранятся защищённые tickets и общий Data Protection key ring.
-Настройте TLS/ACL, доступность и persistence/eviction Redis.
-Защитите Data Protection master keys независимым сертификатом/KMS.
-Например: `AddDataProtection().ProtectKeysWithCertificate(certificate)`.
+Передайте обязательный `Bff__EncryptionKey` через secret provider. Сгенерируйте сильный случайный секрет
+один раз (`openssl rand -base64 32`) и сохраняйте между redeploy. На всех репликах должны совпадать
+Redis, application/environment/namespace и секрет. Корневой секрет в Redis не записывается.
 
-Шифрование tickets не защищает от полного доступа к Redis, если master keys доступны там же без дополнительной защиты.
+Настройте TLS/ACL, persistence и eviction Redis. Memory fallback отсутствует.
+При переходе со старого формата сессий или замене секрета остановите реплики, задайте новый `KeyNamespace`
+и удалите старую область после перехода; пользователи войдут заново.
 
-Восстановление старого backup может вернуть удалённые записи и старые credentials.
-В плане восстановления сбрасывайте область сессий и/или отзывайте grants.
-
-Memory fallback отсутствует.
+Формат payload, привязка к session ID, ошибки, ротация и восстановление backup описаны в [руководстве по сессиям](docs/SESSIONS.md).
 
 ### 5. SPA
 
@@ -347,9 +359,9 @@ TTL всегда ограничен минимумом idle и фиксиров�
 Для токенов на 10, 30 и 120 секунд окно составляет 1, 3 и 12 секунд.
 Порог сохраняется в серверном поле `RefreshAt` при входе и после refresh.
 
-Прежний Redis ticket v6 без этого поля читается с тем же Data Protection discriminator.
-На первой активности порог рассчитывается из оставшегося срока и сохраняется через CAS.
-Миграция cookie или сброс key ring для этого не требуются.
+Если в JWE-сессии отсутствует optional поле `RefreshAt`, на первой активности порог
+рассчитывается из оставшегося срока и сохраняется через CAS.
+Переход с прежних Data Protection sessions описан в [руководстве по сессиям](docs/SESSIONS.md#6-переход-замена-секрета-и-backup).
 
 Внутри реплики запросы одной client/session ожидают одну общую задачу.
 Завершённая запись ожидания удаляется.
@@ -414,7 +426,7 @@ Redis и IdP не образуют транзакцию.
 | Модуль         | Ответственность                                                 |
 | -------------- | --------------------------------------------------------------- |
 | Authentication | Стандартные ASP.NET Core OIDC/cookie schemes и protocol events  |
-| Sessions       | Protected Redis tickets, CAS refresh, GETDEL logout, revocation |
+| Sessions       | Direct JWE encryption, Redis CAS refresh, GETDEL logout, revocation |
 | Security       | Собственная BFF session, Origin/Fetch-Site и CSRF boundary      |
 | Endpoints      | Фиксированный browser HTTP-контракт                             |
 | Forwarding     | Стандартные YARP transforms и HTTPS destination validation      |

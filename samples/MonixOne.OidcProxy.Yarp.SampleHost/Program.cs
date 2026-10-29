@@ -1,6 +1,4 @@
 using StackExchange.Redis;
-using Microsoft.AspNetCore.DataProtection;
-using System.Security.Cryptography.X509Certificates;
 
 namespace MonixOne.OidcProxy.Yarp.SampleHost;
 
@@ -20,12 +18,6 @@ public partial class Program
         builder.Services.AddReverseProxy()
             .LoadFromConfig(builder.Configuration.GetRequiredSection("ReverseProxy"));
         builder.Services.AddOidcProxy(builder.Configuration.GetRequiredSection("Bff"));
-        using var keyEncryptionCertificate = builder.Configuration["DataProtection:CertificatePath"] is { Length: > 0 } path
-            ? X509CertificateLoader.LoadPkcs12FromFile(path, builder.Configuration["DataProtection:CertificatePassword"], X509KeyStorageFlags.EphemeralKeySet)
-            : null;
-        if (keyEncryptionCertificate is not null)
-            builder.Services.AddDataProtection().ProtectKeysWithCertificate(keyEncryptionCertificate);
-
         await using var app = builder.Build();
         app.Services.GetRequiredService<ConnectionMultiplexer>();
         if (!app.Environment.IsDevelopment()) app.UseHsts();
