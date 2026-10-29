@@ -48,7 +48,7 @@ public sealed class OpenIddictFlowTests(InfrastructureFixture infrastructure, Op
         using var identityBrowser = identity.CreateBrowser();
         using var session = await identityBrowser.PostAsync("/test/session", null, ct);
         using var login = await browser.LoginAsync(identityBrowser);
-        host.Clock.Advance(TimeSpan.FromSeconds(100));
+        host.Clock.Advance(TimeSpan.FromSeconds(110));
 
         // Act
         var responses = await Task.WhenAll(Enumerable.Range(0, 30).Select(_ => browser.ApiAsync(cancellationToken: ct)));

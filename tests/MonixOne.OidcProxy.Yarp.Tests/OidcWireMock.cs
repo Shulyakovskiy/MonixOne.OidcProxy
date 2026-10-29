@@ -40,6 +40,8 @@ internal sealed class OidcWireMock : IDisposable
     internal bool EncryptIdentityTokens { get; set; }
     internal bool OmitRefreshIdentityToken { get; set; }
     internal bool OmitRotatedRefreshToken { get; set; }
+    internal bool IssueRefreshToken { get; set; } = true;
+    internal int AccessTokenLifetime { get; set; } = 120;
     internal SymmetricSecurityKey EncryptionKey { get; } = new(RandomNumberGenerator.GetBytes(32));
     internal string LastAccessToken = string.Empty;
     internal string LastRefreshToken = string.Empty;
@@ -165,13 +167,13 @@ internal sealed class OidcWireMock : IDisposable
         }
         LastAccessToken = "opaque-access-" + Guid.NewGuid().ToString("N");
         LastRefreshToken = refreshing && OmitRotatedRefreshToken ? form["refresh_token"].ToString() : Guid.NewGuid().ToString("N");
-        _refreshTokens[LastRefreshToken] = nonce!;
+        if (IssueRefreshToken) _refreshTokens[LastRefreshToken] = nonce!;
         var response = Json(new
         {
             access_token = InvalidTokenResponse == "missing-access-token" ? null : LastAccessToken,
-            refresh_token = refreshing && OmitRotatedRefreshToken ? null : LastRefreshToken,
+            refresh_token = !IssueRefreshToken || refreshing && OmitRotatedRefreshToken ? null : LastRefreshToken,
             token_type = InvalidTokenResponse == "token-type" ? "mac" : "Bearer",
-            expires_in = InvalidTokenResponse == "expiration" ? 0 : 120,
+            expires_in = InvalidTokenResponse == "expiration" ? 0 : AccessTokenLifetime,
             id_token = refreshing && OmitRefreshIdentityToken ? null : CreateIdToken(nonce!)
         });
         if (refreshing)

@@ -20,6 +20,7 @@ internal sealed class TokenSession(SessionStore store, BffClient client,
 {
     internal async Task<AuthenticationTicket?> GetActiveTicketAsync(string id, CancellationToken cancellationToken)
     {
+        var activityAt = timeProvider.GetUtcNow();
         var waitStarted = timeProvider.GetTimestamp();
         for (var attempt = 0; attempt < 4096; attempt++)
         {
@@ -49,22 +50,25 @@ internal sealed class TokenSession(SessionStore store, BffClient client,
                 if (await store.CompareExchangeAsync(snapshot, null, cancellationToken)) return null;
                 continue;
             }
-            if (expiresAt > now + client.Options.RefreshBeforeExpiration)
+            var refreshToken = ticket.Properties.GetTokenValue("refresh_token");
+            // Old v6 records have no RefreshAt. Derive it once from their remaining
+            // token lifetime and persist it with the same CAS used for activity.
+            var refreshAt = snapshot.State.RefreshAt ?? StoredSession.CalculateRefreshAt(expiresAt, now);
+            if (expiresAt > now && (string.IsNullOrEmpty(refreshToken) || now < refreshAt))
             {
-                if (snapshot.State.IdleExpiresAt - now < client.Options.SessionIdleTimeout / 2)
+                var idleUntil = activityAt + client.Options.SessionIdleTimeout;
+                if (idleUntil > snapshot.State.AbsoluteExpiresAt) idleUntil = snapshot.State.AbsoluteExpiresAt;
+                var touched = snapshot.State with
                 {
-                    if (!await store.CompareExchangeAsync(snapshot,
-                            snapshot.State with { IdleExpiresAt = now + client.Options.SessionIdleTimeout }, cancellationToken))
-                        continue;
-                }
+                    IdleExpiresAt = idleUntil > snapshot.State.IdleExpiresAt ? idleUntil : snapshot.State.IdleExpiresAt,
+                    RefreshAt = refreshAt
+                };
+                if (touched != snapshot.State && !await store.CompareExchangeAsync(snapshot, touched, cancellationToken)) continue;
                 return ticket;
             }
 
-            var refreshToken = ticket.Properties.GetTokenValue("refresh_token");
             if (string.IsNullOrEmpty(refreshToken))
             {
-                // A token without offline access remains usable until its actual expiration.
-                if (expiresAt > now) return ticket;
                 if (await store.CompareExchangeAsync(snapshot, null, cancellationToken)) return null;
                 continue;
             }
@@ -113,12 +117,16 @@ internal sealed class TokenSession(SessionStore store, BffClient client,
                         await RevokeAsync(updated, CancellationToken.None);
                         return null;
                     }
+                    var completedAt = timeProvider.GetUtcNow();
+                    var idleUntil = completedAt + client.Options.SessionIdleTimeout;
                     var completed = latest.State with
                     {
                         Ticket = Convert.ToBase64String(TicketSerializer.Default.Serialize(updated)),
-                        IdleExpiresAt = timeProvider.GetUtcNow() + client.Options.SessionIdleTimeout,
+                        IdleExpiresAt = idleUntil < latest.State.AbsoluteExpiresAt ? idleUntil : latest.State.AbsoluteExpiresAt,
                         RefreshOperation = null,
-                        RefreshDeadline = null
+                        RefreshDeadline = null,
+                        RefreshAt = StoredSession.CalculateRefreshAt(DateTimeOffset.Parse(updated.Properties.GetTokenValue("expires_at")!,
+                            CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind), completedAt)
                     };
                     if (await store.CompareExchangeAsync(latest, completed, ownerTimeout.Token)) return updated;
                 }

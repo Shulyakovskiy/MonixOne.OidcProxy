@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Globalization;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.DataProtection;
@@ -34,7 +35,9 @@ internal sealed class SessionStore(BffClient client, ConnectionMultiplexer conne
         var state = new StoredSession(
             Convert.ToBase64String(TicketSerializer.Default.Serialize(ticket)),
             now + client.Options.SessionAbsoluteTimeout,
-            now + client.Options.SessionIdleTimeout);
+            now + client.Options.SessionIdleTimeout,
+            RefreshAt: StoredSession.CalculateRefreshAt(DateTimeOffset.Parse(ticket.Properties.GetTokenValue("expires_at")!,
+                CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind), now));
         var value = Encode(state);
         var key = client.RedisKeyPrefix + "sessions:" + id;
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
@@ -130,8 +133,11 @@ internal sealed class SessionStore(BffClient client, ConnectionMultiplexer conne
 }
 
 internal sealed record StoredSession(string Ticket, DateTimeOffset AbsoluteExpiresAt, DateTimeOffset IdleExpiresAt,
-    string? RefreshOperation = null, DateTimeOffset? RefreshDeadline = null)
+    string? RefreshOperation = null, DateTimeOffset? RefreshDeadline = null, DateTimeOffset? RefreshAt = null)
 {
+    internal static DateTimeOffset CalculateRefreshAt(DateTimeOffset expiresAt, DateTimeOffset receivedAt)
+        => expiresAt - TimeSpan.FromTicks(Math.Clamp((expiresAt - receivedAt).Ticks / 10, 0, TimeSpan.FromSeconds(30).Ticks));
+
     internal AuthenticationTicket ReadTicket() => TicketSerializer.Default.Deserialize(Convert.FromBase64String(Ticket))
         ?? throw new CryptographicException("Invalid authentication ticket.");
 }

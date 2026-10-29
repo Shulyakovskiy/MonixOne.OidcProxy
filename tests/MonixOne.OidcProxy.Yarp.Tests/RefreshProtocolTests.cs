@@ -21,7 +21,7 @@ public sealed class RefreshProtocolTests(InfrastructureFixture infrastructure)
         using var identityBrowser = identity.CreateIdentityBrowser();
         using var login = await browser.LoginAsync(identityBrowser);
         identity.InvalidIdToken = defect;
-        host.Clock.Advance(TimeSpan.FromSeconds(100));
+        host.Clock.Advance(TimeSpan.FromSeconds(110));
 
         // Act
         using var refresh = await browser.ApiAsync(cancellationToken: TestContext.Current.CancellationToken);
@@ -50,9 +50,9 @@ public sealed class RefreshProtocolTests(InfrastructureFixture infrastructure)
         using var login = await browser.LoginAsync(identityBrowser);
 
         // Act
-        host.Clock.Advance(TimeSpan.FromSeconds(100));
+        host.Clock.Advance(TimeSpan.FromSeconds(110));
         using var first = await browser.ApiAsync(cancellationToken: TestContext.Current.CancellationToken);
-        host.Clock.Advance(TimeSpan.FromSeconds(100));
+        host.Clock.Advance(TimeSpan.FromSeconds(110));
         using var second = await browser.ApiAsync(cancellationToken: TestContext.Current.CancellationToken);
         using var logout = await browser.LogoutAsync(cancellationToken: TestContext.Current.CancellationToken);
 
@@ -75,7 +75,7 @@ public sealed class RefreshProtocolTests(InfrastructureFixture infrastructure)
         using var identityBrowser = identity.CreateIdentityBrowser();
         using var login = await browser.LoginAsync(identityBrowser);
         identity.RotateSigningKey();
-        host.Clock.Advance(TimeSpan.FromSeconds(100));
+        host.Clock.Advance(TimeSpan.FromSeconds(110));
 
         // Act
         using var response = await browser.ApiAsync(cancellationToken: TestContext.Current.CancellationToken);
@@ -98,7 +98,7 @@ public sealed class RefreshProtocolTests(InfrastructureFixture infrastructure)
         using var browser = host.CreateBrowser();
         using var identityBrowser = identity.CreateIdentityBrowser();
         using var login = await browser.LoginAsync(identityBrowser);
-        host.Clock.Advance(TimeSpan.FromSeconds(100));
+        host.Clock.Advance(TimeSpan.FromSeconds(110));
 
         // Act
         var owner = browser.ApiAsync(cancellationToken: ct);
@@ -129,7 +129,7 @@ public sealed class RefreshProtocolTests(InfrastructureFixture infrastructure)
 
         // Act
         using var login = await browser.LoginAsync(identityBrowser);
-        host.Clock.Advance(TimeSpan.FromSeconds(100));
+        host.Clock.Advance(TimeSpan.FromSeconds(110));
         using var refresh = await browser.ApiAsync(cancellationToken: TestContext.Current.CancellationToken);
 
         // Assert

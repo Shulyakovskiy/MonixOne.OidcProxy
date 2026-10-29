@@ -70,6 +70,7 @@ public sealed class BffApplicationFactory(InfrastructureFixture infrastructure, 
                 options.Authority = authority.AbsoluteUri.TrimEnd('/');
                 options.ClientId = clientId;
                 options.ClientSecret = clientSecret;
+                options.TimeProvider = Clock;
                 options.Scope.Clear();
                 foreach (var scope in new[] { "openid", "offline_access", "api.read" }) options.Scope.Add(scope);
                 options.BackchannelHttpHandler = new HttpClientHandler
@@ -95,6 +96,7 @@ public sealed class BffApplicationFactory(InfrastructureFixture infrastructure, 
             {
                 services.Configure<OpenIdConnectOptions>(OidcProxyDefaults.OpenIdConnectScheme(client.Name), options =>
                 {
+                    options.TimeProvider = Clock;
                     options.BackchannelHttpHandler = new HttpClientHandler
                     {
                         ServerCertificateCustomValidationCallback = (_, certificate, _, _) =>

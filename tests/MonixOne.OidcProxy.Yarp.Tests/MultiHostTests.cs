@@ -94,7 +94,7 @@ public sealed class MultiHostTests(InfrastructureFixture infrastructure)
         using var session = await identity.PostAsync("/test/session", null, ct);
         using var loginA = await browser.LoginAsync(identity);
         using var loginB = await browser.LoginAsync(identity, origin: SecondOrigin);
-        host.Clock.Advance(TimeSpan.FromSeconds(100));
+        host.Clock.Advance(TimeSpan.FromSeconds(110));
 
         // Act
         var firstRequest = browser.ApiAsync(cancellationToken: ct);
@@ -221,7 +221,7 @@ public sealed class MultiHostTests(InfrastructureFixture infrastructure)
         using var identity = first.CreateIdentityBrowser();
         using var loginA = await browser.LoginAsync(identity);
         using var loginB = await browser.LoginAsync(identity, origin: SecondOrigin);
-        host.Clock.Advance(TimeSpan.FromSeconds(100));
+        host.Clock.Advance(TimeSpan.FromSeconds(110));
         var refreshing = browser.ApiAsync(new Uri(SecondOrigin, "/api/status").AbsoluteUri, ct);
         await second.RefreshStarted.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
 
@@ -256,7 +256,7 @@ public sealed class MultiHostTests(InfrastructureFixture infrastructure)
         using var identity = first.CreateIdentityBrowser();
         using var loginA = await browser.LoginAsync(identity);
         using var loginB = await browser.LoginAsync(identity, origin: SecondOrigin);
-        host.Clock.Advance(TimeSpan.FromSeconds(100));
+        host.Clock.Advance(TimeSpan.FromSeconds(110));
         var ownerA = browser.ApiAsync(cancellationToken: ct);
         var ownerB = browser.ApiAsync(new Uri(SecondOrigin, "/api/status").AbsoluteUri, ct);
         await Task.WhenAll(first.RefreshStarted.Task, second.RefreshStarted.Task).WaitAsync(TimeSpan.FromSeconds(10), ct);

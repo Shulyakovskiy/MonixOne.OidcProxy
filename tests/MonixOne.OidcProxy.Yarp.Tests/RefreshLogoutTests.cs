@@ -16,7 +16,7 @@ public sealed class RefreshLogoutTests(InfrastructureFixture infrastructure)
         using var browser = host.CreateBrowser();
         using var identityBrowser = identity.CreateIdentityBrowser();
         using var login = await browser.LoginAsync(identityBrowser);
-        host.Clock.Advance(TimeSpan.FromSeconds(100));
+        host.Clock.Advance(TimeSpan.FromSeconds(110));
         var owner = browser.ApiAsync(cancellationToken: ct);
         await identity.RefreshStarted.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
 
@@ -61,8 +61,8 @@ public sealed class RefreshLogoutTests(InfrastructureFixture infrastructure)
         using var login = await browser.LoginAsync(identityBrowser);
         var cookie = login.Headers.GetValues("Set-Cookie").Single(value => value.StartsWith("__Host-Http-oidcproxy.spa.session=")).Split(';')[0];
         replica.DefaultRequestHeaders.Add("Cookie", cookie);
-        first.Clock.Advance(TimeSpan.FromSeconds(100));
-        second.Clock.Advance(TimeSpan.FromSeconds(100));
+        first.Clock.Advance(TimeSpan.FromSeconds(110));
+        second.Clock.Advance(TimeSpan.FromSeconds(110));
 
         // Act: hold the real HTTP response after redemption so both replicas compete.
         var owner = browser.ApiAsync(cancellationToken: ct);
@@ -92,7 +92,7 @@ public sealed class RefreshLogoutTests(InfrastructureFixture infrastructure)
         using var browser = host.CreateBrowser();
         using var identityBrowser = identity.CreateIdentityBrowser();
         using var login = await browser.LoginAsync(identityBrowser);
-        host.Clock.Advance(TimeSpan.FromSeconds(100));
+        host.Clock.Advance(TimeSpan.FromSeconds(110));
 
         // Act: the refresh response is held after issuing the rotated credential.
         var owner = browser.ApiAsync(cancellationToken: ct);
@@ -123,7 +123,7 @@ public sealed class RefreshLogoutTests(InfrastructureFixture infrastructure)
         using var browser = host.CreateBrowser();
         using var identityBrowser = identity.CreateIdentityBrowser();
         using var login = await browser.LoginAsync(identityBrowser);
-        host.Clock.Advance(TimeSpan.FromSeconds(100));
+        host.Clock.Advance(TimeSpan.FromSeconds(110));
         using var refreshed = await browser.ApiAsync(cancellationToken: ct);
         var currentToken = identity.LastRefreshToken;
 
@@ -156,7 +156,7 @@ public sealed class RefreshLogoutTests(InfrastructureFixture infrastructure)
         using var identityBrowser = identity.CreateIdentityBrowser();
         using var login = await browser.LoginAsync(identityBrowser);
         identity.TokenFailure = failure;
-        host.Clock.Advance(TimeSpan.FromSeconds(100));
+        host.Clock.Advance(TimeSpan.FromSeconds(110));
 
         // Act
         using var first = await browser.ApiAsync(cancellationToken: ct);
@@ -182,7 +182,7 @@ public sealed class RefreshLogoutTests(InfrastructureFixture infrastructure)
         using var browser = host.CreateBrowser();
         using var identityBrowser = identity.CreateIdentityBrowser();
         using var login = await browser.LoginAsync(identityBrowser);
-        host.Clock.Advance(TimeSpan.FromSeconds(100));
+        host.Clock.Advance(TimeSpan.FromSeconds(110));
         using var disconnected = CancellationTokenSource.CreateLinkedTokenSource(ct);
 
         // Act: cancel only after the server has redeemed the rotating refresh token.

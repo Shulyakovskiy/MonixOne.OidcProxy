@@ -6,6 +6,30 @@ namespace MonixOne.OidcProxy.Yarp.Tests;
 public sealed class RedisMutationTests(InfrastructureFixture infrastructure)
 {
     [Fact]
+    public async Task Logout_ConfirmedGetDel_DoesNotSendAnotherSessionDelete()
+    {
+        // Arrange
+        var ct = TestContext.Current.CancellationToken;
+        await using var gate = new RedisReplyGate(infrastructure);
+        using var connection = await gate.ConnectAsync();
+        using var identity = new OidcWireMock(infrastructure);
+        await using var host = identity.CreateBff(connection: connection);
+        using var browser = host.CreateBrowser();
+        using var provider = identity.CreateIdentityBrowser();
+        using var login = await browser.LoginAsync(provider);
+        var extraDelete = gate.HoldNextSessionReply("DEL");
+
+        // Act
+        using var logout = await browser.LogoutAsync(cancellationToken: ct);
+
+        // Assert
+        login.StatusCode.ShouldBe(HttpStatusCode.Redirect);
+        logout.StatusCode.ShouldBe(HttpStatusCode.Redirect);
+        extraDelete.Reached.Task.IsCompleted.ShouldBeFalse();
+        identity.ActiveRefreshTokens.ShouldBe(0);
+    }
+
+    [Fact]
     public async Task Refresh_ClaimReplyTimedOut_ConfirmsOperationBeforeRedemption()
     {
         // Arrange
@@ -17,7 +41,7 @@ public sealed class RedisMutationTests(InfrastructureFixture infrastructure)
         using var browser = host.CreateBrowser();
         using var provider = identity.CreateIdentityBrowser();
         using var login = await browser.LoginAsync(provider);
-        host.Clock.Advance(TimeSpan.FromSeconds(100));
+        host.Clock.Advance(TimeSpan.FromSeconds(110));
         var claim = gate.HoldNextSessionReply("EVAL");
 
         // Act: release only when the timeout causes an ownership recovery read.
@@ -111,7 +135,7 @@ public sealed class RedisMutationTests(InfrastructureFixture infrastructure)
         using var browser = host.CreateBrowser();
         using var provider = identity.CreateIdentityBrowser();
         using var login = await browser.LoginAsync(provider);
-        host.Clock.Advance(TimeSpan.FromSeconds(100));
+        host.Clock.Advance(TimeSpan.FromSeconds(110));
         var claim = gate.HoldNextSessionReply("EVAL");
         using var disconnected = CancellationTokenSource.CreateLinkedTokenSource(ct);
 

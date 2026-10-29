@@ -28,7 +28,6 @@ public sealed class OidcProxyClientOptions
     public Dictionary<string, OidcProxyCookiePolicy> CookiePolicies { get; set; } = new(StringComparer.Ordinal);
 
     internal TimeSpan RefreshTimeout => TimeSpan.FromSeconds(30);
-    internal TimeSpan RefreshBeforeExpiration => TimeSpan.FromSeconds(30);
     internal bool HasValidOrigin => PublicOrigin is { IsAbsoluteUri: true, Scheme: "https", AbsolutePath: "/" } origin &&
         origin.UserInfo.Length == 0 && origin.Query.Length == 0 && origin.Fragment.Length == 0;
     internal bool HasValidPathBase => PathBase.Length == 0 || PathBase.StartsWith('/') &&
