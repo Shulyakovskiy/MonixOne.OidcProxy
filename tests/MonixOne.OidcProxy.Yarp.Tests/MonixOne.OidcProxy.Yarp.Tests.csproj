@@ -7,6 +7,9 @@
     <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
   </PropertyGroup>
   <ItemGroup>
+    <None Include="../../docs/examples/br-admin-identity/appsettings.json" Link="Profiles/BrAdminIdentity/appsettings.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <PackageReference Include="xunit.v3" />
     <PackageReference Include="Shouldly" />
