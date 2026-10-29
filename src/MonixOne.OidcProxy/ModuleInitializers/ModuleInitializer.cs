@@ -401,11 +401,14 @@ public static class ModuleInitializer
         app.MapPost($"/{options.EndpointName}/end-session", async (HttpContext context, SessionStore store, TokenSession tokens) =>
         {
             var id = context.User.FindFirstValue(BffConstants.SessionClaim)!;
-            var snapshot = await store.ReadAsync(id, context.RequestAborted);
+            // Once logout is authorized, a browser disconnect must not interrupt
+            // its local invalidation. GETDEL returns the tokens current at deletion,
+            // including a refresh that committed after authentication of this request.
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var ticket = await store.TakeAsync(id, timeout.Token);
             await context.SignOutAsync(BffConstants.CookieScheme);
-            if (snapshot is not null)
+            if (ticket is not null)
             {
-                var ticket = snapshot.State.ReadTicket();
                 context.Items[BffConstants.LogoutIdTokenItem] = ticket.Properties.GetTokenValue("id_token");
                 await tokens.RevokeAsync(ticket, CancellationToken.None);
             }

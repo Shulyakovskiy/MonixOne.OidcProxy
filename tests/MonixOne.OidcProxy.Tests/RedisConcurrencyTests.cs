@@ -27,6 +27,40 @@ public sealed class RedisFixture : IAsyncLifetime
 public class RedisConcurrencyTests(RedisFixture fixture)
 {
     [Fact]
+    public async Task AtomicLogoutReturnsTheTokenSetThatWinsAgainstRefreshCommit()
+    {
+        using var idp = new FakeIdentityProvider();
+        using var a = await fixture.ConnectAsync();
+        using var b = await fixture.ConnectAsync();
+        var ns = Guid.NewGuid().ToString("N");
+        await using var first = await BffHost.StartAsync(idp, a, ns);
+        await using var second = await BffHost.StartAsync(idp, b, ns);
+        for (var iteration = 0; iteration < 100; iteration++)
+        {
+            var id = await first.SeedSessionAsync(idp);
+            var original = (await first.Store.ReadAsync(id, default))!;
+            var oldToken = original.State.ReadTicket().Properties.GetTokenValue("refresh_token");
+            var updatedTicket = original.State.ReadTicket();
+            updatedTicket.Properties.UpdateTokenValue("refresh_token", "rotated-token");
+            var updated = original.State with
+            {
+                Ticket = Convert.ToBase64String(TicketSerializer.Default.Serialize(updatedTicket))
+            };
+            var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var commit = Task.Run(async () => { await start.Task; return await first.Store.CompareExchangeAsync(original, updated, default); });
+            var logout = Task.Run(async () => { await start.Task; return await second.Store.TakeAsync(id, default); });
+            start.SetResult();
+            var committed = await commit;
+            var taken = await logout;
+            Assert.NotNull(taken);
+            Assert.Equal(committed ? "rotated-token" : oldToken, taken.Properties.GetTokenValue("refresh_token"));
+            Assert.Null(await first.Store.ReadAsync(id, default));
+            Assert.False(await first.Store.CompareExchangeAsync(original, updated, default));
+            Assert.Null(await second.Store.TakeAsync(id, default));
+        }
+    }
+
+    [Fact]
     public async Task IndependentReplicasAndHttpRequestsRefreshExactlyOneTime()
     {
         using var idp = new FakeIdentityProvider { RefreshRelease = new(TaskCreationOptions.RunContinuationsAsynchronously) };

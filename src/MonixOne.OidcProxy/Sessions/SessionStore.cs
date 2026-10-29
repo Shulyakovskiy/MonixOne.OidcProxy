@@ -129,6 +129,34 @@ internal sealed class SessionStore(ProxyOptions options, IDataProtectionProvider
             lock (_memoryGate) _memory.Remove(key);
     }
 
+    internal async Task<AuthenticationTicket?> TakeAsync(string id, CancellationToken cancellationToken)
+    {
+        if (!IsValidId(id)) return null;
+        var key = options.RedisKeyPrefix + "sessions:" + id;
+        string? value;
+        if (Database is { } database)
+            value = (string?)await database.StringGetDeleteAsync(key).WaitAsync(cancellationToken);
+        else
+        {
+            lock (_memoryGate)
+            {
+                value = _memory.Get<string>(key);
+                _memory.Remove(key);
+            }
+        }
+        if (value is null) return null;
+        try
+        {
+            return (JsonSerializer.Deserialize<StoredSession>(_protector.Unprotect(value))
+                ?? throw new CryptographicException("Invalid server session.")).ReadTicket();
+        }
+        catch (Exception e) when (e is CryptographicException or JsonException or FormatException)
+        {
+            // Deletion has already committed. Corrupt credentials cannot be used or revoked.
+            return null;
+        }
+    }
+
     private string Encode(StoredSession state) => _protector.Protect(JsonSerializer.Serialize(state));
     private TimeSpan Lifetime(StoredSession state)
         => (state.AbsoluteExpiresAt < state.IdleExpiresAt ? state.AbsoluteExpiresAt : state.IdleExpiresAt) - timeProvider.GetUtcNow();
