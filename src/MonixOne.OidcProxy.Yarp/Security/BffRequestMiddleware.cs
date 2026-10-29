@@ -58,19 +58,16 @@ internal sealed class BffRequestMiddleware(RequestDelegate next)
             return;
         }
         // Explicit anonymous YARP routes serve assets/public data without a session.
-        // Managed-route transforms still remove browser credentials and never attach tokens.
+        // Managed-route transforms remove BFF credentials; an explicit cookie
+        // policy may carry separately namespaced application correlation cookies.
         if (route is not null && endpoint?.Metadata.GetMetadata<IAllowAnonymous>() is not null)
         {
+            if (route.Metadata?.ContainsKey(OidcProxyDefaults.CookiePolicyMetadataKey) == true) SetNoStore(context);
             await next(context);
             return;
         }
         var options = client.Options;
-        context.Response.Headers.CacheControl = "no-store";
-        context.Response.OnStarting(() =>
-        {
-            context.Response.Headers.CacheControl = "no-store";
-            return Task.CompletedTask;
-        });
+        SetNoStore(context);
         var origin = context.Request.Headers.Origin;
         var fetchSite = context.Request.Headers["Sec-Fetch-Site"];
         if (origin.Count > 1 || origin.Count == 1 && origin[0] != options.PublicOrigin!.GetLeftPart(UriPartial.Authority) ||
@@ -149,6 +146,16 @@ internal sealed class BffRequestMiddleware(RequestDelegate next)
             context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
         }
     }
+    private static void SetNoStore(HttpContext context)
+    {
+        context.Response.Headers.CacheControl = "no-store";
+        context.Response.OnStarting(() =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            return Task.CompletedTask;
+        });
+    }
+
 }
 
 internal sealed class BffAuthenticateResultFeature : IAuthenticateResultFeature

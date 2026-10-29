@@ -22,6 +22,11 @@ public sealed class OidcProxyClientOptions
     /// The maximum session lifetime, which refresh never extends.
     /// </summary>
     public TimeSpan SessionAbsoluteTimeout { get; set; } = TimeSpan.FromHours(8);
+    /// <summary>
+    /// Named, opt-in cookie policies referenced by YARP route metadata.
+    /// </summary>
+    public Dictionary<string, OidcProxyCookiePolicy> CookiePolicies { get; set; } = new(StringComparer.Ordinal);
+
     internal TimeSpan RefreshTimeout => TimeSpan.FromSeconds(30);
     internal TimeSpan RefreshBeforeExpiration => TimeSpan.FromSeconds(30);
     internal bool HasValidOrigin => PublicOrigin is { IsAbsoluteUri: true, Scheme: "https", AbsolutePath: "/" } origin &&

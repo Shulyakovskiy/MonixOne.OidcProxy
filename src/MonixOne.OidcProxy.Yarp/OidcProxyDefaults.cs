@@ -10,6 +10,10 @@ public static class OidcProxyDefaults
     /// </summary>
     public const string ClientMetadataKey = "OidcProxy.Client";
     /// <summary>
+    /// The YARP route metadata key selecting one application cookie policy.
+    /// </summary>
+    public const string CookiePolicyMetadataKey = "OidcProxy.CookiePolicy";
+    /// <summary>
     /// Returns the named cookie authentication scheme for a client.
     /// </summary>
     public static string CookieScheme(string clientName) => $"MonixOne.OidcProxy.Yarp.{clientName}.Cookie";

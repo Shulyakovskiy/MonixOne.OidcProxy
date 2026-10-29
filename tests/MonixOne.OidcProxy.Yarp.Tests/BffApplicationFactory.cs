@@ -29,10 +29,12 @@ public sealed class BffApplicationFactory(InfrastructureFixture infrastructure, 
     public static readonly Uri Origin = new("https://spa.example");
     public ManualClock Clock { get; } = new();
     public string KeyNamespace { get; } = keyNamespace ?? Guid.NewGuid().ToString("N");
+    public Action<OidcProxyClientOptions>? ConfigureClientOptions { get; set; }
     public Action<OpenIdConnectOptions>? ConfigureOidc { get; set; }
     public string PathBase { get; set; } = string.Empty;
     public string ProxyPath { get; set; } = "/api/{**all}";
     public string? WebRoot { get; set; }
+    public Action<List<ClusterConfig>>? ConfigureClusters { get; set; }
     public Action<List<RouteConfig>>? ConfigureRoutes { get; set; }
     private readonly List<(string Name, Uri Origin, Uri Authority, string ClientId, string Secret, Uri Backend, string PathBase)> _clients = [];
     internal void AddClient(string name, Uri origin, OidcWireMock identity, string pathBase = "")
@@ -61,6 +63,7 @@ public sealed class BffApplicationFactory(InfrastructureFixture infrastructure, 
             {
                 options.PublicOrigin = Origin;
                 options.PathBase = PathBase;
+                ConfigureClientOptions?.Invoke(options);
             });
             services.Configure<OpenIdConnectOptions>(OidcProxyDefaults.OpenIdConnectScheme("spa"), options =>
             {
@@ -106,6 +109,7 @@ public sealed class BffApplicationFactory(InfrastructureFixture infrastructure, 
                     { ["primary"] = new() { Address = client.Backend.AbsoluteUri } } });
             }
             ConfigureRoutes?.Invoke(routes);
+            ConfigureClusters?.Invoke(clusters);
             services.AddSingleton<IProxyConfigProvider>(new InMemoryConfigProvider(routes, clusters));
             services.RemoveAll<IForwarderHttpClientFactory>();
             services.AddSingleton<IForwarderHttpClientFactory>(new CertificateForwarderFactory(infrastructure.Certificate));
