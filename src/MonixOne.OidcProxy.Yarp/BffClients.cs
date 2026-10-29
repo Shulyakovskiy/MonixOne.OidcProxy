@@ -26,6 +26,10 @@ internal sealed class BffClients
             .ToFrozenDictionary(c => c.Name, StringComparer.Ordinal);
         if (ByName.Count == 0) throw new InvalidOperationException("Register at least one AddOidcProxyClient.");
         // Host and effective HTTPS port form the origin; implicit and explicit 443 are equivalent.
+        var collision = ByName.Values.GroupBy(c => Key(c.Options.PublicOrigin!.IdnHost, c.Options.PublicOrigin.Port),
+            StringComparer.OrdinalIgnoreCase).FirstOrDefault(group => group.Skip(1).Any());
+        if (collision is not null)
+            throw new InvalidOperationException($"BFF clients {string.Join(", ", collision.Select(c => c.Name))} must use distinct PublicOrigin hosts/ports.");
         _byHost = ByName.Values.ToFrozenDictionary(c => Key(c.Options.PublicOrigin!.IdnHost, c.Options.PublicOrigin.Port),
             StringComparer.OrdinalIgnoreCase);
     }

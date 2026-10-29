@@ -6,6 +6,25 @@ namespace MonixOne.OidcProxy.Yarp.Tests;
 [Collection("Infrastructure")]
 public sealed class SpaHostingTests(InfrastructureFixture infrastructure)
 {
+    [Fact]
+    public async Task Login_RequestMountCaseDiffers_UsesTheRegisteredCallbackUri()
+    {
+        // Arrange
+        var ct = TestContext.Current.CancellationToken;
+        using var identity = new OidcWireMock(infrastructure);
+        await using var host = identity.CreateBff();
+        host.PathBase = "/Portal";
+        using var browser = host.CreateBrowser();
+
+        // Act
+        using var start = await browser.GetAsync("/pOrTaL" + OidcProxyRoutes.Login, ct);
+
+        // Assert
+        start.StatusCode.ShouldBe(HttpStatusCode.Redirect);
+        QueryHelpers.ParseQuery(start.Headers.Location!.Query)["redirect_uri"].ToString()
+            .ShouldBe("https://spa.example/Portal/.auth/login/callback");
+    }
+
     [Theory]
     [InlineData("/admin")]
     [InlineData("/workspace/portal")]

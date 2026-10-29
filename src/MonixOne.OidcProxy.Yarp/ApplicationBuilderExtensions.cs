@@ -7,7 +7,9 @@ using MonixOne.OidcProxy.Yarp.Security;
 
 namespace MonixOne.OidcProxy.Yarp;
 
-/// <summary>Composes the multi-origin SPA BFF pipeline and its YARP endpoints.</summary>
+/// <summary>
+/// Composes the multi-origin SPA BFF pipeline and its YARP endpoints.
+/// </summary>
 public static class ApplicationBuilderExtensions
 {
     /// <summary>

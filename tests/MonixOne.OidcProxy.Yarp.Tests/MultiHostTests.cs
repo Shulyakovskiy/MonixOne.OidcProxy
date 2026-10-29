@@ -1,6 +1,4 @@
 using System.Net;
-using Microsoft.AspNetCore.WebUtilities;
-using Yarp.ReverseProxy.Configuration;
 
 namespace MonixOne.OidcProxy.Yarp.Tests;
 
@@ -8,6 +6,76 @@ namespace MonixOne.OidcProxy.Yarp.Tests;
 public sealed class MultiHostTests(InfrastructureFixture infrastructure)
 {
     private static readonly Uri SecondOrigin = new("https://second.example");
+
+    [Theory]
+    [InlineData("https://spa.example")]
+    [InlineData("https://SPA.example:443")]
+    public async Task Startup_DuplicateEffectiveOrigins_RejectsAmbiguousClientSelection(string origin)
+    {
+        // Arrange
+        using var first = new OidcWireMock(infrastructure);
+        using var second = new OidcWireMock(infrastructure, "second-client");
+        await using var host = first.CreateBff();
+        host.AddClient("second", new Uri(origin), second);
+
+        // Act
+        var failure = Should.Throw<InvalidOperationException>(() => host.CreateBrowser());
+
+        // Assert
+        failure.Message.ShouldContain("distinct PublicOrigin");
+        first.CodeRequests.ShouldBe(0);
+        second.CodeRequests.ShouldBe(0);
+    }
+
+    [Theory]
+    [InlineData("unknown-client")]
+    [InlineData("foreign-host")]
+    [InlineData("wildcard-host")]
+    public async Task Startup_InvalidClientRouteBinding_RejectsConfiguration(string defect)
+    {
+        // Arrange
+        using var identity = new OidcWireMock(infrastructure);
+        await using var host = identity.CreateBff();
+        host.ConfigureRoutes = routes => routes[0] = defect switch
+        {
+            "unknown-client" => routes[0] with { Metadata = new Dictionary<string, string> { [OidcProxyDefaults.ClientMetadataKey] = "missing" } },
+            "foreign-host" => routes[0] with { Match = routes[0].Match with { Hosts = ["foreign.example"] } },
+            _ => routes[0] with { Match = routes[0].Match with { Hosts = ["*.example"] } }
+        };
+
+        // Act
+        var failure = Should.Throw<InvalidOperationException>(() => host.CreateBrowser());
+
+        // Assert
+        failure.Message.ShouldContain("configuration");
+        identity.BackendRequests.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Proxy_UnmanagedHost_KeepsItsNativeYarpAuthenticationContract()
+    {
+        // Arrange
+        using var identity = new OidcWireMock(infrastructure);
+        await using var host = identity.CreateBff();
+        host.ConfigureRoutes = routes => routes.Add(routes[0] with
+        {
+            RouteId = "unmanaged", Metadata = null,
+            Match = routes[0].Match with { Hosts = ["other-service.example"] }
+        });
+        using var browser = host.CreateBrowser(handleCookies: false);
+        browser.DefaultRequestHeaders.Add("Cookie", "native=session");
+
+        // Act
+        using var response = await browser.ApiAsync("https://other-service.example/api/status",
+            TestContext.Current.CancellationToken, csrf: false, bearer: "native-token");
+
+        // Assert
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        var forwarded = identity.BackendRequests.Single();
+        forwarded.Headers!["Authorization"].Single().ShouldBe("Bearer native-token");
+        forwarded.Headers["Cookie"].Single().ShouldBe("native=session");
+        response.Headers.Contains("Set-Cookie").ShouldBeTrue();
+    }
 
     [Fact]
     public async Task LoginRefreshAndLogout_TwoClientsOnOneOpenIddictServer_KeepGrantsIsolated()

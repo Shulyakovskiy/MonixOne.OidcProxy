@@ -6,13 +6,21 @@ namespace MonixOne.OidcProxy.Yarp;
 /// </summary>
 public sealed class OidcProxyClientOptions
 {
-    /// <summary>The exact public HTTPS origin shared by this SPA and its BFF endpoints.</summary>
+    /// <summary>
+    /// The exact public HTTPS origin shared by this SPA and its BFF endpoints.
+    /// </summary>
     public Uri? PublicOrigin { get; set; }
-    /// <summary>The optional URI-escaped deployment path, for example /portal.</summary>
+    /// <summary>
+    /// The optional URI-escaped deployment path, for example /portal.
+    /// </summary>
     public string PathBase { get; set; } = string.Empty;
-    /// <summary>The inactivity lifetime of the server session.</summary>
+    /// <summary>
+    /// The inactivity lifetime of the server session.
+    /// </summary>
     public TimeSpan SessionIdleTimeout { get; set; } = TimeSpan.FromMinutes(20);
-    /// <summary>The maximum session lifetime, which refresh never extends.</summary>
+    /// <summary>
+    /// The maximum session lifetime, which refresh never extends.
+    /// </summary>
     public TimeSpan SessionAbsoluteTimeout { get; set; } = TimeSpan.FromHours(8);
     internal TimeSpan RefreshTimeout => TimeSpan.FromSeconds(30);
     internal TimeSpan RefreshBeforeExpiration => TimeSpan.FromSeconds(30);

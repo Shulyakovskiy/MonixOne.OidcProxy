@@ -1,7 +1,10 @@
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MonixOne.OidcProxy.Yarp.Authentication;
 using MonixOne.OidcProxy.Yarp.Forwarding;
@@ -13,10 +16,14 @@ using Yarp.ReverseProxy.Transforms.Builder;
 
 namespace MonixOne.OidcProxy.Yarp;
 
-/// <summary>Composes native OIDC, Redis sessions and YARP for multiple SPA origins.</summary>
+/// <summary>
+/// Composes native OIDC, Redis sessions and YARP for multiple SPA origins.
+/// </summary>
 public static class ServiceCollectionExtensions
 {
-    /// <summary>Registers shared infrastructure after YARP and a host-owned ConnectionMultiplexer.</summary>
+    /// <summary>
+    /// Registers shared infrastructure after YARP and a host-owned ConnectionMultiplexer.
+    /// </summary>
     public static IServiceCollection AddOidcProxy(this IServiceCollection services, Action<ProxyOptions> configure)
     {
         ArgumentNullException.ThrowIfNull(configure);
@@ -43,7 +50,9 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
-    /// <summary>Registers one named confidential OIDC client on a distinct HTTPS origin.</summary>
+    /// <summary>
+    /// Registers one named confidential OIDC client on a distinct HTTPS origin.
+    /// </summary>
     public static IServiceCollection AddOidcProxyClient(this IServiceCollection services, string name,
         Action<OidcProxyClientOptions> configureClient, Action<OpenIdConnectOptions> configureOidc)
     {
@@ -63,10 +72,12 @@ public static class ServiceCollectionExtensions
                 "SessionAbsoluteTimeout must be between SessionIdleTimeout and 365 days; both must be positive.")
             .ValidateOnStart();
         services.AddKeyedSingleton<SessionStore>(name, (sp, _) => new SessionStore(sp.GetRequiredService<BffClients>().ByName[name],
-            sp.GetRequiredService<ConnectionMultiplexer>(), sp.GetRequiredService<Microsoft.AspNetCore.DataProtection.IDataProtectionProvider>(),
+            sp.GetRequiredService<ConnectionMultiplexer>(), sp.GetRequiredService<IDataProtectionProvider>(),
             sp.GetRequiredService<TimeProvider>()));
-        services.AddKeyedSingleton<TokenSession>(name, (sp, _) => ActivatorUtilities.CreateInstance<TokenSession>(sp,
-            sp.GetRequiredKeyedService<SessionStore>(name), sp.GetRequiredService<BffClients>().ByName[name]));
+        services.AddKeyedSingleton<TokenSession>(name, (sp, _) => new TokenSession(
+            sp.GetRequiredKeyedService<SessionStore>(name), sp.GetRequiredService<BffClients>().ByName[name],
+            sp.GetRequiredService<IOptionsMonitor<OpenIdConnectOptions>>(), sp.GetRequiredService<TimeProvider>(),
+            sp.GetRequiredService<IHostApplicationLifetime>(), sp.GetRequiredService<ILogger<TokenSession>>()));
         OidcAuthentication.Register(services, name, configureOidc);
         return services;
     }

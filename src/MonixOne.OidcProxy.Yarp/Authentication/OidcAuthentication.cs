@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Extensions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using MonixOne.OidcProxy.Yarp.Sessions;
 using StackExchange.Redis;
@@ -76,9 +77,9 @@ internal static class OidcAuthentication
                 configureOidc(oidc);
             });
         services.AddOptions<CookieAuthenticationOptions>(OidcProxyDefaults.CookieScheme(name))
-            .Configure<Microsoft.Extensions.Options.IOptionsMonitor<OidcProxyClientOptions>>((cookie, options) => cookie.ExpireTimeSpan = options.Get(name).SessionAbsoluteTimeout);
+            .Configure<IOptionsMonitor<OidcProxyClientOptions>>((cookie, options) => cookie.ExpireTimeSpan = options.Get(name).SessionAbsoluteTimeout);
         services.AddOptions<OpenIdConnectOptions>(OidcProxyDefaults.OpenIdConnectScheme(name))
-            .Configure<Microsoft.Extensions.Options.IOptionsMonitor<OidcProxyClientOptions>>((oidc, options) => ConfigureProtocolEvents(oidc, name, options.Get(name)))
+            .Configure<IOptionsMonitor<OidcProxyClientOptions>>((oidc, options) => ConfigureProtocolEvents(oidc, name, options.Get(name)))
             .Validate(o => Uri.TryCreate(o.Authority, UriKind.Absolute, out var authority) && authority.Scheme == "https" &&
                 authority.UserInfo.Length == 0 && authority.Query.Length == 0 && authority.Fragment.Length == 0,
                 "An HTTPS OIDC Authority without credentials, query or fragment is required.")
@@ -130,13 +131,13 @@ internal static class OidcAuthentication
         {
             await redirect(context);
             context.ProtocolMessage.RedirectUri = UriHelper.BuildAbsolute(options.PublicOrigin!.Scheme,
-                HostString.FromUriComponent(options.PublicOrigin.Authority), context.Request.PathBase, OidcProxyRoutes.LoginCallback);
+                HostString.FromUriComponent(options.PublicOrigin.Authority), PathString.FromUriComponent(options.PathBase), OidcProxyRoutes.LoginCallback);
         };
         oidc.Events.OnRedirectToIdentityProviderForSignOut = context =>
         {
             context.ProtocolMessage.ClientId = oidc.ClientId;
             context.ProtocolMessage.PostLogoutRedirectUri = UriHelper.BuildAbsolute(options.PublicOrigin!.Scheme,
-                HostString.FromUriComponent(options.PublicOrigin.Authority), context.Request.PathBase, oidc.SignedOutCallbackPath);
+                HostString.FromUriComponent(options.PublicOrigin.Authority), PathString.FromUriComponent(options.PathBase), oidc.SignedOutCallbackPath);
             context.ProtocolMessage.IdTokenHint = context.HttpContext.Items[BffConstants.LogoutIdTokenItem] as string;
             return Task.CompletedTask;
         };
