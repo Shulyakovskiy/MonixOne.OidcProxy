@@ -70,7 +70,16 @@ internal static class BffEndpoints
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             var store = context.RequestServices.GetRequiredKeyedService<SessionStore>(client.Name);
             var tokens = context.RequestServices.GetRequiredKeyedService<TokenSession>(client.Name);
-            var ticket = await store.TakeAsync(id, timeout.Token);
+            AuthenticationTicket? ticket;
+            try
+            {
+                ticket = await store.TakeAsync(id, timeout.Token);
+            }
+            catch (OperationCanceledException e) when (timeout.IsCancellationRequested)
+            {
+                throw new SessionUnavailableException("Unable to confirm local logout within its server budget.", e);
+            }
+            context.Items[BffConstants.RemovedSessionItem] = (client.Name, id);
             await context.SignOutAsync(client.CookieScheme);
             if (ticket is not null)
             {

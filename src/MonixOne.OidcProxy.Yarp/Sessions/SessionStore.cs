@@ -28,6 +28,7 @@ internal sealed class SessionStore(BffClient client, ConnectionMultiplexer conne
 
     internal async Task<string> CreateAsync(AuthenticationTicket ticket, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var now = timeProvider.GetUtcNow();
         var id = RandomNumberGenerator.GetHexString(64);
         var state = new StoredSession(
@@ -36,8 +37,18 @@ internal sealed class SessionStore(BffClient client, ConnectionMultiplexer conne
             now + client.Options.SessionIdleTimeout);
         var value = Encode(state);
         var key = client.RedisKeyPrefix + "sessions:" + id;
-        if (!await Database.StringSetAsync(key, value, Lifetime(state), When.NotExists).WaitAsync(cancellationToken))
-            throw new InvalidOperationException("Unable to allocate a unique server session.");
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        try
+        {
+            if (!await Database.StringSetAsync(key, value, Lifetime(state), When.NotExists).WaitAsync(timeout.Token))
+                throw new InvalidOperationException("Unable to allocate a unique server session.");
+        }
+        catch (OperationCanceledException e) when (timeout.IsCancellationRequested)
+        {
+            // An unacknowledged SET can leave an unreachable record until TTL.
+            // Sign-in owns revocation of the credentials already issued by IdP.
+            throw new SessionUnavailableException("Unable to confirm session creation within its server budget.", e);
+        }
         return id;
     }
 

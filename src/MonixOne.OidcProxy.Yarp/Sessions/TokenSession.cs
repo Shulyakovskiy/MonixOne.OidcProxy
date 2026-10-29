@@ -10,6 +10,7 @@ using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
+using StackExchange.Redis;
 
 namespace MonixOne.OidcProxy.Yarp.Sessions;
 
@@ -74,11 +75,20 @@ internal sealed class TokenSession(SessionStore store, BffClient client,
                 RefreshOperation = operation,
                 RefreshDeadline = now + client.Options.RefreshTimeout
             };
-            if (!await store.CompareExchangeAsync(snapshot, claimed, cancellationToken)) continue;
-
-            // Once claimed, caller disconnection must not interrupt persisting a rotated token.
+            // Redis may commit a claim even if waiting for its reply is cancelled.
+            // Ownership and completion therefore share a server-owned budget from
+            // the moment the mutation is sent, not from receipt of its response.
+            cancellationToken.ThrowIfCancellationRequested();
             using var ownerTimeout = CancellationTokenSource.CreateLinkedTokenSource(applicationLifetime.ApplicationStopping);
             ownerTimeout.CancelAfter(client.Options.RefreshTimeout);
+            try
+            {
+                if (!await TryClaimAsync(snapshot, claimed, ownerTimeout.Token)) continue;
+            }
+            catch (OperationCanceledException e) when (ownerTimeout.IsCancellationRequested)
+            {
+                throw new SessionUnavailableException("Refresh ownership could not be confirmed within its server budget.", e);
+            }
             AuthenticationTicket updated;
             try
             {
@@ -122,6 +132,23 @@ internal sealed class TokenSession(SessionStore store, BffClient client,
             }
         }
         throw new SessionUnavailableException("Session contention exceeded the bounded retry limit.");
+    }
+
+    private async Task<bool> TryClaimAsync(SessionSnapshot snapshot, StoredSession claimed, CancellationToken ct)
+    {
+        try
+        {
+            return await store.CompareExchangeAsync(snapshot, claimed, ct);
+        }
+        catch (Exception e) when (e is RedisException or RedisTimeoutException)
+        {
+            // A transport timeout does not establish whether Lua committed. Read
+            // our exact operation ID; never redeem based on an assumed write.
+            var latest = await store.ReadAsync(snapshot.Id, ct);
+            if (latest is not null && latest.State.RefreshOperation == claimed.RefreshOperation &&
+                latest.State.RefreshDeadline > timeProvider.GetUtcNow()) return true;
+            throw new SessionUnavailableException("Unable to confirm refresh ownership after a Redis failure.", e);
+        }
     }
 
     private async Task<AuthenticationTicket> RefreshAsync(AuthenticationTicket previous, string refreshToken, CancellationToken ct)

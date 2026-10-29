@@ -63,10 +63,17 @@ internal static class OidcAuthentication
                 cookie.Events.OnSigningOut = async context =>
                 {
                     var id = context.HttpContext.User.FindFirstValue(BffConstants.SessionClaim);
-                    if (id is not null)
+                    if (id is not null && !Equals(context.HttpContext.Items[BffConstants.RemovedSessionItem], (name, id)))
                     {
                         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-                        await context.HttpContext.RequestServices.GetRequiredKeyedService<SessionStore>(name).RemoveAsync(id, timeout.Token);
+                        try
+                        {
+                            await context.HttpContext.RequestServices.GetRequiredKeyedService<SessionStore>(name).RemoveAsync(id, timeout.Token);
+                        }
+                        catch (OperationCanceledException e) when (timeout.IsCancellationRequested)
+                        {
+                            throw new SessionUnavailableException("Unable to confirm session invalidation within its server budget.", e);
+                        }
                     }
                 };
             })
@@ -170,6 +177,7 @@ internal static class OidcAuthentication
             try
             {
                 id = await store.CreateAsync(fullTicket, context.HttpContext.RequestAborted);
+                context.HttpContext.RequestAborted.ThrowIfCancellationRequested();
                 if (previousId is not null)
                 {
                     using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
@@ -185,7 +193,7 @@ internal static class OidcAuthentication
                 properties.ExpiresUtc = now + options.SessionAbsoluteTimeout;
                 properties.IsPersistent = false;
             }
-            catch
+            catch (Exception failure)
             {
                 if (id is not null)
                 {
@@ -198,6 +206,17 @@ internal static class OidcAuthentication
                     }
                 }
                 await services.GetRequiredKeyedService<TokenSession>(name).RevokeAsync(fullTicket, CancellationToken.None);
+                if (failure is RedisException or RedisTimeoutException or SessionUnavailableException)
+                {
+                    // TicketReceived runs after the native remote-authentication
+                    // failure boundary. Handle infrastructure failures here too.
+                    context.HandleResponse();
+                    context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                    context.Response.Headers.CacheControl = "no-store";
+                    services.GetRequiredService<ILoggerFactory>().CreateLogger("MonixOne.OidcProxy.Yarp.Session")
+                        .LogWarning("OIDC session creation failed. Failure type: {FailureType}", failure.GetType().Name);
+                    return;
+                }
                 throw;
             }
         };

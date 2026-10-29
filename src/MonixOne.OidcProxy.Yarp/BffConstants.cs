@@ -11,4 +11,5 @@ internal static class BffConstants
     internal static readonly object SignInRefreshTokenItem = new();
     internal static readonly object TicketItem = new();
     internal static readonly object LogoutIdTokenItem = new();
+    internal static readonly object RemovedSessionItem = new();
 }
