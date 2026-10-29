@@ -9,8 +9,8 @@ describe("BFF browser contract", () => {
     vi.mocked(fetch).mockResolvedValue(
       new Response(JSON.stringify({ value: 1 })),
     );
-    await expect(bffGet("/demo-api/status")).resolves.toEqual({ value: 1 });
-    expect(fetch).toHaveBeenCalledWith("/demo-api/status", {
+    await expect(bffGet("/api/status")).resolves.toEqual({ value: 1 });
+    expect(fetch).toHaveBeenCalledWith("/api/status", {
       credentials: "same-origin",
       headers: { "X-CSRF": "1", Accept: "application/json" },
     });

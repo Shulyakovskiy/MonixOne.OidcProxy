@@ -1,3 +1,4 @@
+import { routes } from "./routes";
 export type Claims = Record<string, string[]>;
 export type ApiStatus = {
   service: string;
@@ -37,7 +38,7 @@ export async function readSession(
   signal?: AbortSignal,
 ): Promise<Claims | null> {
   try {
-    const claims = await bffGet<unknown>("/.auth/me", signal);
+    const claims = await bffGet<unknown>(routes.user, signal);
     if (
       typeof claims !== "object" ||
       claims === null ||
@@ -59,7 +60,7 @@ export async function readSession(
 
 export async function submitLogout(): Promise<void> {
   const token = await bffGet<{ requestToken: string; formFieldName: string }>(
-    "/.auth/antiforgery",
+    routes.antiforgery,
   );
   if (
     !token ||
@@ -72,7 +73,7 @@ export async function submitLogout(): Promise<void> {
   }
   const form = document.createElement("form");
   form.method = "POST";
-  form.action = "/.auth/end-session";
+  form.action = routes.logout;
   const field = document.createElement("input");
   field.type = "hidden";
   field.name = token.formFieldName;

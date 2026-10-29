@@ -1,12 +1,8 @@
-import { useEffect, useState } from "react";
-import {
-  BffError,
-  bffGet,
-  readSession,
-  submitLogout,
-  type ApiStatus,
-  type Claims,
-} from "./bff";
+import { routes } from "./routes";
+import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { BffError, bffGet, submitLogout, type ApiStatus, type Claims } from "./bff";
+import { sessionQueryOptions, sessionQueryKey } from "./session";
 
 type Session =
   | { status: "loading" }
@@ -15,67 +11,48 @@ type Session =
   | { status: "error" };
 
 export default function App() {
-  const [session, setSession] = useState<Session>({ status: "loading" });
-  const [pending, setPending] = useState<"api" | "logout" | null>(null);
+  const queryClient = useQueryClient();
+  const [apiPending, setApiPending] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [result, setResult] = useState<ApiStatus | null>(null);
-
-  async function load(signal?: AbortSignal) {
-    setSession({ status: "loading" });
-    setProblem(null);
-    try {
-      const claims = await readSession(signal);
-      if (!signal?.aborted)
-        setSession(
-          claims
-            ? { status: "authenticated", claims }
-            : { status: "anonymous" },
-        );
-    } catch (error) {
-      if (!signal?.aborted) {
-        setSession({ status: "error" });
-        setProblem(
-          error instanceof Error
-            ? error.message
-            : "Не удалось проверить сессию.",
-        );
-      }
-    }
-  }
-
-  useEffect(() => {
-    const controller = new AbortController();
-    void load(controller.signal);
-    return () => controller.abort();
-  }, []);
+  const logoutMutation = useMutation({
+    mutationFn: submitLogout,
+    retry: false,
+    onMutate: () => queryClient.cancelQueries(),
+    onSuccess: () => { queryClient.clear(); setResult(null); },
+    onError: (error) => setProblem(error.message),
+  });
+  const sessionQuery = useQuery({
+    ...sessionQueryOptions,
+    enabled: !logoutMutation.isPending && !logoutMutation.isSuccess,
+  });
+  const session: Session = logoutMutation.isSuccess ? { status: "anonymous" }
+    : sessionQuery.isPending ? { status: "loading" }
+    : sessionQuery.isError ? { status: "error" }
+    : sessionQuery.data ? { status: "authenticated", claims: sessionQuery.data }
+    : { status: "anonymous" };
+  const pending = logoutMutation.isPending ? "logout" : apiPending ? "api" : null;
+  const displayedProblem = problem ?? sessionQuery.error?.message ?? null;
 
   async function checkApi() {
-    setPending("api");
+    setApiPending(true);
     setProblem(null);
     setResult(null);
     try {
-      setResult(await bffGet<ApiStatus>("/demo-api/status"));
+      setResult(await queryClient.fetchQuery({
+        queryKey: ["protected-api", sessionQuery.data?.sub?.[0]],
+        queryFn: ({ signal }) => bffGet<ApiStatus>(routes.apiStatus, signal),
+        staleTime: 0, gcTime: 0, retry: false,
+      }));
     } catch (error) {
-      if (error instanceof BffError && error.status === 401)
-        setSession({ status: "anonymous" });
-      setProblem(
-        error instanceof Error ? error.message : "Не удалось выполнить запрос.",
-      );
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      if (error instanceof BffError && error.status === 401) {
+        queryClient.clear();
+        queryClient.setQueryData(sessionQueryKey, null);
+      }
+      setProblem(error instanceof Error ? error.message : "Не удалось выполнить запрос.");
     } finally {
-      setPending(null);
-    }
-  }
-
-  async function logout() {
-    setPending("logout");
-    setProblem(null);
-    try {
-      await submitLogout();
-    } catch (error) {
-      if (error instanceof BffError && error.status === 401)
-        setSession({ status: "anonymous" });
-      setProblem(error instanceof Error ? error.message : "Не удалось выйти.");
-      setPending(null);
+      setApiPending(false);
     }
   }
 
@@ -95,7 +72,7 @@ export default function App() {
           <span>Защищённая сессия.</span>
         </h1>
         <p className="intro">
-          Вход через Identity, проверка сессии и запрос к защищённому API.
+          Вход через OpenID Connect, проверка сессии и запрос к защищённому API.
         </p>
         <div className="status" role="status">
           <span className={`dot ${session.status}`} />
@@ -127,15 +104,15 @@ export default function App() {
             </div>
           </dl>
         )}
-        {problem && (
+        {displayedProblem && (
           <p className="error" role="alert">
-            {problem}
+            {displayedProblem}
           </p>
         )}
         <div className="actions">
           {session.status === "anonymous" && (
-            <a className="button" href="/.auth/login">
-              Войти через Identity <span aria-hidden>↗</span>
+            <a className="button" href={routes.login}>
+              Войти через OpenID Connect <span aria-hidden>↗</span>
             </a>
           )}
           {session.status === "authenticated" && (
@@ -148,18 +125,18 @@ export default function App() {
               </button>
               <button
                 className="secondary"
-                disabled={pending !== null}
-                onClick={() => void logout()}
+                disabled={logoutMutation.isPending || logoutMutation.isSuccess}
+                onClick={() => logoutMutation.mutate()}
               >
                 {pending === "logout" ? "Выходим…" : "Выйти"}
               </button>
             </>
           )}
           {session.status === "error" && (
-            <button onClick={() => void load()}>Повторить</button>
+            <button onClick={() => void sessionQuery.refetch()}>Повторить</button>
           )}
         </div>
-        {result && (
+        {result && session.status === "authenticated" && (
           <div className="api-result">
             <span className="eyebrow">API RESPONSE</span>
             <pre>{JSON.stringify(result, null, 2)}</pre>
@@ -167,7 +144,7 @@ export default function App() {
         )}
       </section>
       <footer>
-        MonixOne.OidcProxy{" "}
+        MonixOne.OidcProxy.Yarp{" "}
         <span>
           Сессия через HttpOnly cookie. OAuth-токены хранятся на сервере.
         </span>

@@ -2,11 +2,17 @@ import { readFileSync } from "node:fs";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
-export default defineConfig(({ command }) => {
+export default defineConfig(({ command, mode }) => {
   if (command === "build") {
     return {
       plugins: [react()],
       build: { outDir: "../wwwroot", emptyOutDir: true },
+    };
+  }
+  if (mode === "docs") {
+    return {
+      plugins: [react()],
+      server: { host: "localhost", port: 4173, strictPort: true },
     };
   }
   const cert = process.env.DEV_HTTPS_CERT;
@@ -26,7 +32,7 @@ export default defineConfig(({ command }) => {
       port: 5173,
       strictPort: true,
       https: { cert: readFileSync(cert), key: readFileSync(key) },
-      proxy: { "/.auth": proxy, "/api": proxy, "/demo-api": proxy },
+      proxy: { "/.auth": proxy, "/api": proxy },
     },
   };
 });

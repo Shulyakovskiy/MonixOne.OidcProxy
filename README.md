@@ -1,89 +1,191 @@
-# MonixOne.OidcProxy
+# MonixOne.OidcProxy.Yarp
 
-A .NET 10 LTS backend for browser applications, forked from [OidcProxy.Net](https://github.com/oidcproxydotnet/OidcProxy.Net). Licensed under LGPL-3.0-only; the upstream copyright and license are retained.
+[![CI](https://github.com/Shulyakovskiy/MonixOne.OidcProxy/actions/workflows/ci.yml/badge.svg)](https://github.com/Shulyakovskiy/MonixOne.OidcProxy/actions/workflows/ci.yml)
 
-The browser holds a framework-protected, Secure, HttpOnly, host-only cookie containing an opaque session reference. OIDC runs on the server using the ASP.NET Core OpenID Connect handler (Authorization Code + S256 PKCE, state, correlation and nonce). Access, refresh and ID tokens remain in a protected server-side record. YARP attaches the current bearer token to downstream requests and removes browser cookies and downstream Set-Cookie headers.
+BFF для SPA на **.NET 10 LTS**, ASP.NET Core OpenID Connect, **YARP** и Redis. Один NuGet-пакет `MonixOne.OidcProxy.Yarp`: browser получает HttpOnly session cookie, OAuth-токены остаются на сервере. Поддерживается стандартный confidential Authorization Code + PKCE flow, включая OpenIddict.
 
-## Minimal host
+Репозиторий основан на [OidcProxy.Net](https://github.com/oidcproxydotnet/OidcProxy.Net). Лицензия **LGPL-3.0-only** и upstream copyright сохранены. Сервисов приложения, authorization server или UI входа пакет не реализует.
+
+## Интерактивное руководство для SPA
+
+```sh
+cd samples/MonixOne.OidcProxy.Yarp.SampleHost/ClientApp
+corepack pnpm install --frozen-lockfile
+corepack pnpm docs:dev
+```
+
+Откройте **http://localhost:4173/docs**. Для статической документации не нужны BFF, Redis, сертификат или секреты.
+
+- **Пошаговая настройка**: топология и публичные URL → регистрация OpenIddict/OIDC client → Redis и Data Protection → копируемые appsettings/Program.cs → React → проверка окружения. Валидация URL и namespace выполняется в браузере; параметры не сохраняются и не отправляются.
+- **Как работает SPA**: интерактивные этапы login, API, refresh и logout, контракт endpoints, ответственность браузера/BFF/provider/API и ограничения при сбоях.
+
+Документация входит в сборку sample по `/docs`. Полные команды запуска HTTPS SPA/BFF приведены в [sample README](samples/MonixOne.OidcProxy.Yarp.SampleHost/README.md).
+
+## Пошаговая настройка
+
+### 1. Топология и клиент провайдера
+
+SPA и BFF должны иметь **один публичный HTTPS origin**, например `https://spa.example.com`. Resource API доступен BFF по HTTPS и самостоятельно валидирует access token. Login — обычная top-level навигация на `/.auth/login`.
+
+У провайдера зарегистрируйте confidential web client с client secret, code/refresh grants, PKCE S256 и scopes `openid profile offline_access api.read` (последний — пример scope вашего API).
+
+| Настройка | Точное значение для примера |
+|---|---|
+| Redirect URI | `https://spa.example.com/.auth/login/callback` |
+| Post logout redirect URI | `https://spa.example.com/.auth/signout-callback` |
+| Return URL приложения | `/`, фиксирован пакетом |
+
+Для **OpenIddict** нужны authorization, token, end-session и revocation endpoint permissions, code/refresh grant permissions, response type `code` и permission для API scope. Сервер включает `AllowAuthorizationCodeFlow()`, `AllowRefreshTokenFlow()` и PKCE; login/consent, claim destinations и resource assignment принадлежат authorization server. См. [application permissions](https://documentation.openiddict.com/configuration/application-permissions.html) и [официальные guides](https://documentation.openiddict.com/guides/).
+
+Encrypted access tokens OpenIddict передаются без разбора. API должен использовать подходящую OpenIddict validation/decryption или introspection. Signed ID tokens, в том числе signed-and-encrypted при настройке стандартного `TokenDecryptionKey`, проверяются framework/IdentityModel; профиль SPA берётся из ID token, полномочия API — из access token.
+
+### 2. Пакет и конфигурация
+
+```sh
+dotnet add package MonixOne.OidcProxy.Yarp --version 6.0.0
+```
+
+До первой публикации используйте ProjectReference из этого репозитория или локальный feed из `dotnet pack`. Все версии зависимостей репозитория централизованы в `Directory.Packages.props`.
+
+```json
+{
+  "Bff": {
+    "PublicOrigin": "https://spa.example.com",
+    "ApplicationName": "customer-portal",
+    "KeyNamespace": "web",
+    "SessionIdleTimeout": "00:20:00",
+    "SessionAbsoluteTimeout": "08:00:00"
+  },
+  "OpenIdConnect": {
+    "Authority": "https://identity.example.com",
+    "ClientId": "spa-bff",
+    "Scope": ["openid", "profile", "offline_access", "api.read"]
+  },
+  "ReverseProxy": {
+    "Routes": {
+      "api": { "ClusterId": "resource-api", "Match": { "Path": "/api/{**all}" } }
+    },
+    "Clusters": {
+      "resource-api": { "Destinations": { "primary": { "Address": "https://api.example.com/" } } }
+    }
+  }
+}
+```
+
+`OpenIdConnect__ClientSecret` и `ConnectionStrings__Redis` передавайте через secret provider/environment. `ASPNETCORE_ENVIRONMENT` задаёт environment-сегмент Redis. Секретов в `VITE_*`, SPA bundle или исходниках быть не должно.
+
+### 3. ASP.NET Core host
 
 ```csharp
-using MonixOne.OidcProxy.ModuleInitializers;
-using MonixOne.OidcProxy.OpenIdConnect;
+using MonixOne.OidcProxy.Yarp;
 using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
-var config = builder.Configuration.GetRequiredSection("OidcProxy")
-    .Get<OidcProxyConfig>(o => o.ErrorOnUnknownConfiguration = true)!;
-await using var redis = await ConnectionMultiplexer.ConnectAsync(
-    builder.Configuration.GetConnectionString("Redis")!);
+builder.Services.AddSingleton(sp => ConnectionMultiplexer.Connect(
+    sp.GetRequiredService<IConfiguration>().GetConnectionString("Redis")
+    ?? throw new InvalidOperationException("ConnectionStrings:Redis is required.")));
+builder.Services.AddReverseProxy()
+    .LoadFromConfig(builder.Configuration.GetRequiredSection("ReverseProxy"));
+builder.Services.AddOidcProxy(bff =>
+{
+    builder.Configuration.GetRequiredSection("Bff").Bind(bff);
+    bff.EnvironmentName = builder.Environment.EnvironmentName;
+}, oidc => builder.Configuration.GetRequiredSection("OpenIdConnect").Bind(oidc));
 
-builder.Services.AddOidcProxy(config, options =>
-    options.ConfigureRedisBackBone(redis,
-        projectName: "BeetRoute",
-        environmentName: builder.Environment.EnvironmentName,
-        keyNamespace: "admin-identity"));
-
-await using var app = builder.Build();
+var app = builder.Build();
+app.Services.GetRequiredService<ConnectionMultiplexer>();
+if (!app.Environment.IsDevelopment()) app.UseHsts();
+app.UseHttpsRedirection();
 app.UseDefaultFiles();
 app.UseStaticFiles();
 app.UseOidcProxy();
-await app.RunAsync();
+app.MapFallbackToFile("index.html").AllowAnonymous();
+app.Run();
 ```
 
-The multiplexer belongs to the host. The library never creates a connection per request and never disposes the supplied multiplexer. All Redis keys, including the Data Protection key ring, are scoped by lowercase `project:environment:namespace:`. Segments allow ASCII letters, digits, dots, hyphens and underscores. Examples:
+`UseOidcProxy()` подключает routing/authentication/authorization, BFF endpoints и `MapReverseProxy()`. Все proxy routes этого BFF требуют его сессию и CSRF header. Дополнительный `MapReverseProxy()` не нужен. Настройка путей и маршрутов — стандартный YARP configuration; пример сохраняет `/api/…` без преобразования.
 
-```text
-beetroute:production:admin-identity:sessions:<opaque-id>
-beetroute:production:admin-identity:data-protection
-beetroute:development:admin-identity:sessions:<opaque-id>
+На ingress настройте ForwardedHeaders **до** HTTPS redirect/BFF и доверяйте только своим proxies/networks. PublicOrigin всегда указывает внешний origin браузера. Не отключайте проверку TLS downstream.
+
+### 4. Redis и ключи
+
+Один host-owned `ConnectionMultiplexer` используется через DI. Требуется Redis 6.2+ с GETDEL и Lua. Redis namespace: `{application}:{environment}:{namespace}:`, сегменты нормализуются в lowercase. Реплики одного BFF используют одинаковые значения; независимые приложения и окружения — разные.
+
+В Redis хранятся защищённые tickets и общий Data Protection key ring. Хост должен обеспечить TLS/ACL, доступность, политику persistence/eviction и **независимую защиту Data Protection master keys сертификатом/KMS**, например через `AddDataProtection().ProtectKeysWithCertificate(certificate)`. Шифрование tickets не защищает от полного доступа к Redis, если master keys доступны там же без дополнительной защиты.
+
+Восстановление старого backup может вернуть удалённые записи и старые credentials. В плане восстановления сбрасывайте область сессий и/или отзывайте grants. Memory fallback отсутствует.
+
+### 5. SPA
+
+```ts
+// Login — навигация, не fetch.
+window.location.assign("/.auth/login");
+
+const response = await fetch("/.auth/me", {
+  credentials: "same-origin",
+  headers: { "X-CSRF": "1", Accept: "application/json" },
+});
 ```
 
-Use a different namespace for each BFF/client or independently deployed application. Replicas of the same BFF must use the same scope and cookie settings. Use distinct CookieName values if multiple BFF applications share one browser origin.
+Те же headers нужны для всех proxy API, включая GET. `401` → очистить кэш пользователя и предложить вход; `403` → запрос отклонён защитой/авторизацией; `503` → временная недоступность. Не повторяйте изменяющие запросы автоматически.
 
-See [the React + Vite host](samples/MonixOneBff.Host/README.md) and [migration notes](docs/MIGRATION-6.md) for complete configuration. Client secrets and Redis credentials come from the host's configuration provider or environment, never from browser code. The example expects `OidcProxy__Oidc__ClientSecret` and `ConnectionStrings__Redis` to be supplied externally.
+Sample использует официальный **@tanstack/react-query** для cache/focus/reconnect и polling `/.auth/me` раз в 60 секунд только в видимой authenticated SPA. Polling поддерживает idle-сессию активной, но не продлевает её absolute lifetime. Anonymous/background вкладка не запускает продление по таймеру; браузер может приостанавливать таймеры. OAuth SDK и browser refresh tokens не требуются.
 
-## Browser contract
+Logout: отменить UI query, получить `/.auth/antiforgery` с `X-CSRF: 1`, отправить native POST form с выданным framework token на `/.auth/end-session`. Это позволяет браузеру пройти redirect к провайдеру. Полный код находится в [bff.ts](samples/MonixOne.OidcProxy.Yarp.SampleHost/ClientApp/src/bff.ts).
 
-For an existing YARP gateway and BR.Identity, see [integration and compatibility](docs/INTEGRATION.md). Place the BFF in a browser YARP host with Identity as its external OIDC provider. Shared gateways can opt into ProtectOnlyMarkedRoutes and keep their Bearer/M2M routes.
+## Как работает SPA
 
-- Navigate to `GET /.auth/login` to start OIDC. Register the exact public HTTPS callback `/.auth/login/callback` on a **confidential** Identity client.
-- Send `X-CSRF: 1` on every proxy/API call, including GET, and on `GET /.auth/me`. Cookies are sent to the BFF origin. No access or refresh token is returned to JavaScript.
-- `POST /.auth/end-session` accepts the CSRF header or a validated ASP.NET Core antiforgery form token and ends the local server session before best-effort refresh-token revocation and OIDC logout. GET logout returns 405. For top-level browser navigation, fetch `GET /.auth/antiforgery` with X-CSRF: 1, then submit a native POST form using its requestToken/formFieldName; this follows the Identity logout redirect without cross-origin fetch.
-- Mark locally hosted API endpoints with `.AsOidcProxyApi()` to apply authorization, refresh and CSRF checks. Proxy endpoints and `/me` receive these checks automatically.
-- 401 means authentication must be restarted. 403 means the CSRF/origin check or authorization failed. 503 means session storage or the identity provider is unavailable; it is never converted to anonymous proxy access.
+![SPA, YARP BFF, Redis, OpenID Provider и Resource API](BFF-flow.png)
 
-Prefer serving the SPA and BFF from one origin. The library does not enable cross-origin credential access. An Origin header must match the configured public origin; cross-origin Fetch Metadata is rejected. Static assets can be served separately before the BFF middleware.
+![Authorization Code + PKCE login с серверной сессией](BFF-login-workflow.png)
 
-## Refresh and failure guarantees
+| Endpoint | Назначение |
+|---|---|
+| `GET /.auth/login` | OIDC challenge, фиксированный return `/` |
+| `GET /.auth/login/callback` | Framework state/correlation/nonce validation и обмен code |
+| `GET /.auth/me` | Claims сессии, без токенов; cookie + `X-CSRF: 1` |
+| `GET /.auth/antiforgery` | Framework token для logout form; cookie + `X-CSRF: 1` |
+| `POST /.auth/end-session` | Локальное удаление сессии, best-effort revocation, RP logout |
+| `GET /.auth/signout-callback` | Завершение logout, переход `/` |
+| Настроенные YARP routes | Cookie + `X-CSRF: 1`; серверный Bearer к API |
 
-A compare-and-set transition records a unique pending refresh **before** calling the token endpoint. Competing requests wait for its result. The new access/refresh/ID token set is written in one protected record only if that pending operation still owns the session. Logout deletes the record, so a late refresh cannot recreate it. Late credentials are best-effort revoked.
+Framework защищает session cookie; она содержит случайную ссылку, а не OAuth tokens. Cookie — `__Host-Http-oidcproxy.session`, Secure/HttpOnly, SameSite Strict, host-only, Path `/`. Correlation/nonce cookies используют штатные настройки для внешнего OIDC callback. Чужой Origin/Fetch-Site отклоняется. Нет CORS-контракта для другого origin SPA.
 
-No refresh or authorization-code redemption is automatically retried. A transport failure, worker crash or storage failure after token redemption can make the outcome unknown: the session then requires reauthentication. An expired pending operation is never reclaimed to redeem the old refresh token again. Availability is deliberately sacrificed rather than risking rotation replay or overwriting logout.
+YARP удаляет входящие Cookie/Authorization, добавляет server access token и убирает downstream Set-Cookie. Destinations фиксируются конфигурацией по HTTPS, запрет на userinfo/query/fragment и отключение certificate validation. Authenticated ответы имеют `Cache-Control: no-store`. API самостоятельно проверяет issuer, audience/resource и scope/roles.
 
-These guarantees rely on the configured Redis primary retaining acknowledged writes. Asynchronous Redis failover, restore from an old backup or split-brain can lose the pending marker. There is no distributed transaction or exactly-once guarantee spanning Redis and the identity provider. Configure Redis persistence, TLS, access controls and failover according to the application's requirements. A lost server session requires a new OIDC login.
+Refresh начинается за 30 секунд до истечения access token. Redis CAS сохраняет pending marker до обмена rotating credential; один владелец обслуживает конкурентные запросы/реплики. Caller disconnect не прерывает сохранение результата. Deadline — 30 секунд; refresh/code exchange не повторяются при неизвестном исходе. Отсутствие нового ID/refresh token обрабатывается по стандарту.
 
-Without Redis, storage is in-process with the same compare-and-set behavior; sessions do not survive a host restart and cannot be shared between replicas. A configured Redis outage never falls back to in-process storage.
+Logout атомарно выполняет GETDEL текущего ticket, затем очищает cookie и пытается отозвать refresh token с ограниченным таймаутом. Поздний refresh не восстанавливает удалённую запись и отзывает известный новый credential best effort. Antiforgery/logout не блокируются ожидающим refresh.
 
-## Security and deployment
+**Границы:** Redis и IdP не образуют общую транзакцию. Неизвестный результат refresh требует повторного входа. Logout не отменяет уже отправленный API-запрос и не обеспечивает мгновенный глобальный отзыв выданного JWT. HttpOnly не защищает от XSS-вызовов API; CSP и безопасность SPA принадлежат хосту.
 
-- The public HTTPS origin must be explicitly configured with `CustomHostName` or `SetCustomHostName`. Redirect URLs do not trust request Host headers. Configure trusted forwarded headers and allowed hosts on the hosting application/reverse proxy.
-- ID tokens must be signed and pass the framework's issuer, audience, lifetime, nonce and correlation validation. Unsigned ID tokens are rejected even in Code flow. Refreshed ID tokens must retain subject, issuer, audience, nonce (when returned), and authentication time. Access tokens can be opaque: the downstream API owns their validation.
-- Session idle lifetime defaults to 20 minutes; absolute lifetime defaults to 8 hours. Refresh cannot extend the absolute lifetime. Tokens without a refresh token remain usable until actual access-token expiry.
-- Server records use ASP.NET Core Data Protection. Its Redis key ring shares the application scope. To protect against full Redis read compromise, wrap Data Protection keys with an independently held certificate/key service using the host's standard `AddDataProtection().ProtectKeysWithCertificate(...)` configuration. Storing both unwrapped master keys and encrypted records in Redis is not protection against full Redis compromise.
-- Do not log cookies, Authorization headers, token responses, callback query strings, client secrets or request bodies containing credentials. The sample suppresses Hosting.Diagnostics request URL logging; configure equivalent redaction on ingress, telemetry and logging sinks.
-- Token revocation at logout is best effort and logged on failure. Already issued JWT access tokens may remain usable until expiry. Back-channel logout/session administration across the identity provider is not implemented by this library.
+Реализация следует профилю BFF из [RFC 10017](https://datatracker.ietf.org/doc/html/rfc10017) и [OAuth Security BCP](https://www.rfc-editor.org/rfc/rfc9700.html), использует стандартный [RP-initiated logout](https://openid.net/specs/openid-connect-rpinitiated-1_0.html). Это не заявление о сертификации или отсутствии всех уязвимостей.
 
-## Build and verification
+## Состав одного пакета
 
-Requires the .NET SDK pinned in `global.json` and Docker for the real Redis tests. The React/Vite sample uses Node.js 24.15+ and npm; run npm ci, npm test and npm run build in samples/MonixOneBff.Host/ClientApp before publishing the host.
+| Модуль | Ответственность |
+|---|---|
+| Authentication | Стандартные ASP.NET Core OIDC/cookie schemes и protocol events |
+| Sessions | Protected Redis tickets, CAS refresh, GETDEL logout, revocation |
+| Security | Собственная BFF session, Origin/Fetch-Site и CSRF boundary |
+| Endpoints | Фиксированный browser HTTP-контракт |
+| Forwarding | Стандартные YARP transforms и HTTPS destination validation |
+
+Public API и namespace: `MonixOne.OidcProxy.Yarp`; `ProxyOptions`, `OidcProxyDefaults`, `OidcProxyRoutes`, `AddOidcProxy`, `UseOidcProxy`. Provider-specific packages, alternate proxy modes и общий mutable in-memory session cache удалены. OIDC настраивается штатным `OpenIdConnectOptions`, routing — штатным YARP.
+
+## Проверка и публикация
+
+Команды, инфраструктура тестов и проверяемые failure-сценарии описаны в [TESTING.md](docs/TESTING.md). Требуются SDK из `global.json`, Docker, Node 24.15+ и pnpm 12.16.1.
 
 ```sh
-dotnet restore MonixOne.OidcProxy.sln
-dotnet build MonixOne.OidcProxy.sln -c Release --no-restore
-dotnet test MonixOne.OidcProxy.sln -c Release --no-build
-dotnet pack MonixOne.OidcProxy.sln -c Release --no-build -o artifacts/packages
+dotnet restore MonixOne.OidcProxy.Yarp.sln
+dotnet build MonixOne.OidcProxy.Yarp.sln -c Release --no-restore -p:GeneratePackageOnBuild=false
+dotnet test MonixOne.OidcProxy.Yarp.sln -c Release --no-build
+dotnet pack src/MonixOne.OidcProxy.Yarp/MonixOne.OidcProxy.Yarp.csproj -c Release --no-build -o artifacts/packages
 ```
 
-Dependency versions are centralized in `Directory.Packages.props`; package references do not override versions. All runtime namespaces and assembly/package IDs are under `MonixOne.OidcProxy`.
+CI проверяет пакет, HTTP/concurrency/OpenIddict тесты, SPA и документацию. Workflow публикации запускается после merge PR в main через environment `production`, NuGet trusted publishing и `NuGet/login`, с `NUGET_USER` в secrets. Создайте trusted publisher в NuGet для этого репозитория/workflow/environment; настройка другого репозитория не переносится автоматически. Публикация версии необратима: повышайте Version перед следующим релизом.
 
-The test matrix is documented in [docs/TESTING.md](docs/TESTING.md). Auth0 and Entra wrappers use the same validated framework handler; their production tenants and a particular BR.Identity deployment require deployment-specific integration testing. The fork does not claim that an undisclosed upstream CVE has been fixed without its technical details and affected versions.
+### Upstream security issue
+
+Проверено 29.10.2026: [upstream #373 — Security Issue – CVE Assigned](https://github.com/oidcproxydotnet/OidcProxy.Net/issues/373) открыт. Автор сообщает о полученном CVE, но номер, affected versions и технические детали не опубликованы в issue; публичный advisory репозитория не найден. Исправленные здесь refresh/logout ошибки подтверждены regression tests. **Утверждать, что неназванный CVE исправлен, без disclosure нельзя.**
