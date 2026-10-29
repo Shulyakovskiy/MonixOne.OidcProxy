@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>MonixOne.OidcProxy.Auth0</PackageId>
+    <Version>6.0.0</Version>
+    <Authors>Albert Starreveld; MonixOne contributors</Authors>
+    <Company>MonixOne</Company>
+    <Description>A .NET 10 BFF with framework OIDC validation, server-side sessions, atomic token rotation and YARP.</Description>
+    <RepositoryUrl>https://github.com/Shulyakovskiy/MonixOne.OidcProxy</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/Shulyakovskiy/MonixOne.OidcProxy</PackageProjectUrl>
+    <PackageLicenseExpression>LGPL-3.0-only</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageReleaseNotes>Version 6: see docs/MIGRATION-6.md for breaking API and security changes.</PackageReleaseNotes>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="../MonixOne.OidcProxy.OpenIdConnect/MonixOne.OidcProxy.OpenIdConnect.csproj" />
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
+    <None Include="../../license.txt" Pack="true" PackagePath="/" />
+  </ItemGroup>
+</Project>

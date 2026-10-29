@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+    <PackageReference Include="OpenIddict.EntityFrameworkCore" />
+    <PackageReference Include="OpenIddict.Server.AspNetCore" />
+    <PackageReference Include="Testcontainers.PostgreSql" />
+    <PackageReference Include="Microsoft.AspNetCore.TestHost" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" PrivateAssets="all" />
+    <PackageReference Include="Testcontainers.Redis" />
+    <PackageReference Include="coverlet.collector" PrivateAssets="all" />
+    <ProjectReference Include="../../src/MonixOne.OidcProxy.OpenIdConnect/MonixOne.OidcProxy.OpenIdConnect.csproj" />
+    <ProjectReference Include="../../src/MonixOne.OidcProxy.Auth0/MonixOne.OidcProxy.Auth0.csproj" />
+    <ProjectReference Include="../../src/MonixOne.OidcProxy.EntraId/MonixOne.OidcProxy.EntraId.csproj" />
+  </ItemGroup>
+</Project>
