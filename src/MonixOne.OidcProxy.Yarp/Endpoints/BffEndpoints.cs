@@ -7,7 +7,6 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.Extensions.DependencyInjection;
 using MonixOne.OidcProxy.Yarp.Sessions;
-using StackExchange.Redis;
 
 namespace MonixOne.OidcProxy.Yarp.Endpoints;
 

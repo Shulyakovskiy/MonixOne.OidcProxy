@@ -1,6 +1,5 @@
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
-using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -67,6 +66,8 @@ public static class ServiceCollectionExtensions
         services.AddOptions<ProxyOptions>().Configure(configure)
             .Validate(o => ProxyOptions.IsKeySegment(o.ApplicationName) && ProxyOptions.IsKeySegment(o.EnvironmentName) && ProxyOptions.IsKeySegment(o.KeyNamespace),
                 "ApplicationName, EnvironmentName and KeyNamespace require 1-64 ASCII letters, digits, dots, underscores or hyphens.")
+            .Validate(o => !string.IsNullOrWhiteSpace(o.EncryptionKey),
+                "Bff:EncryptionKey is required and must contain a strong random secret.")
             .ValidateOnStart();
         services.AddSingleton<BffClients>();
         services.AddHttpContextAccessor();
@@ -107,7 +108,7 @@ public static class ServiceCollectionExtensions
                 "SessionAbsoluteTimeout must be between SessionIdleTimeout and 365 days; both must be positive.")
             .ValidateOnStart();
         services.AddKeyedSingleton<SessionStore>(name, (sp, _) => new SessionStore(sp.GetRequiredService<BffClients>().ByName[name],
-            sp.GetRequiredService<ConnectionMultiplexer>(), sp.GetRequiredService<IDataProtectionProvider>(),
+            sp.GetRequiredService<ConnectionMultiplexer>(), sp.GetRequiredService<IOptions<ProxyOptions>>(),
             sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<IHostApplicationLifetime>()));
         services.AddKeyedSingleton<TokenSession>(name, (sp, _) => new TokenSession(
             sp.GetRequiredKeyedService<SessionStore>(name), sp.GetRequiredService<BffClients>().ByName[name],

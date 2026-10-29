@@ -68,7 +68,7 @@ internal sealed class TokenSession(SessionStore store, BffClient client,
                 continue;
             }
             var refreshToken = ticket.Properties.GetTokenValue("refresh_token");
-            // Legacy v6 records derive a stable threshold on their first activity.
+            // Records without RefreshAt derive a stable threshold on their first activity.
             var refreshAt = snapshot.State.RefreshAt ?? StoredSession.CalculateRefreshAt(expiresAt, now);
             if (expiresAt > now && (string.IsNullOrEmpty(refreshToken) || now < refreshAt))
             {

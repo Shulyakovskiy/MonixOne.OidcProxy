@@ -17,6 +17,13 @@ public sealed class ProxyOptions
     /// The namespace distinguishing independent gateways.
     /// </summary>
     public string KeyNamespace { get; set; } = "oidcproxy";
+    /// <summary>
+    /// The password used by jose-jwt PBES2 to encrypt session data in Redis.
+    /// Supply a strong random secret through configuration and
+    /// keep the same value across restarts and replicas of this BFF.
+    /// </summary>
+    public string EncryptionKey { get; set; } = string.Empty;
+
     internal string RedisKeyPrefix =>
         $"{ApplicationName.ToLowerInvariant()}:{EnvironmentName.ToLowerInvariant()}:{KeyNamespace.ToLowerInvariant()}:";
     internal static bool IsKeySegment(string value) => !string.IsNullOrWhiteSpace(value) && value.Length <= 64 &&

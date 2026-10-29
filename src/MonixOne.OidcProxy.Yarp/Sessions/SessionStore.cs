@@ -1,9 +1,10 @@
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text.Json;
+using Jose;
 using Microsoft.AspNetCore.Authentication;
-using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 using StackExchange.Redis;
 
 namespace MonixOne.OidcProxy.Yarp.Sessions;
@@ -13,11 +14,11 @@ namespace MonixOne.OidcProxy.Yarp.Sessions;
 /// the previously read value, so a late refresh cannot overwrite logout or newer tokens.
 /// Redis failures never fall back to an independent in-process session.
 /// </summary>
-internal sealed class SessionStore(BffClient client, ConnectionMultiplexer connection, IDataProtectionProvider protection,
+internal sealed class SessionStore(BffClient client, ConnectionMultiplexer connection, IOptions<ProxyOptions> options,
     TimeProvider timeProvider, IHostApplicationLifetime lifetime)
 {
     private readonly CancellationToken _stopping = lifetime.ApplicationStopping;
-    private readonly IDataProtector _protector = protection.CreateProtector("MonixOne.OidcProxy.Yarp.ServerSession.v6", client.CookieName);
+    private readonly string _encryptionKey = options.Value.EncryptionKey;
     private IDatabase Database => connection.GetDatabase();
 
     private const string CompareExchangeScript = """
@@ -35,14 +36,15 @@ internal sealed class SessionStore(BffClient client, ConnectionMultiplexer conne
         cancellationToken.ThrowIfCancellationRequested();
         var now = timeProvider.GetUtcNow();
         var id = RandomNumberGenerator.GetHexString(64);
+        var key = client.RedisKeyPrefix + "sessions:" + id;
         var state = new StoredSession(
             Convert.ToBase64String(TicketSerializer.Default.Serialize(ticket)),
             now + client.Options.SessionAbsoluteTimeout,
             now + client.Options.SessionIdleTimeout,
+            key,
             RefreshAt: StoredSession.CalculateRefreshAt(DateTimeOffset.Parse(ticket.Properties.GetTokenValue("expires_at")!,
                 CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind), now));
         var value = Encode(state);
-        var key = client.RedisKeyPrefix + "sessions:" + id;
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_stopping);
         timeout.CancelAfter(TimeSpan.FromSeconds(5));
         try
@@ -73,15 +75,7 @@ internal sealed class SessionStore(BffClient client, ConnectionMultiplexer conne
             string? value = await Database.StringGetAsync(key).WaitAsync(cancellationToken);
             if (value is null) return null;
 
-            StoredSession? state = null;
-            try
-            {
-                state = JsonSerializer.Deserialize<StoredSession>(_protector.Unprotect(value));
-            }
-            catch (Exception e) when (e is CryptographicException or JsonException)
-            {
-                // Invalid protected data is rejected and removed below. Never log it.
-            }
+            var state = Decode(value, key);
             var now = timeProvider.GetUtcNow();
             if (state is not null && state.AbsoluteExpiresAt > now && state.IdleExpiresAt > now)
                 return new SessionSnapshot(id, value, state);
@@ -128,24 +122,41 @@ internal sealed class SessionStore(BffClient client, ConnectionMultiplexer conne
         if (value is null) return null;
         try
         {
-            return (JsonSerializer.Deserialize<StoredSession>(_protector.Unprotect(value))
-                ?? throw new CryptographicException("Invalid server session.")).ReadTicket();
+            return Decode(value, key)?.ReadTicket();
         }
-        catch (Exception e) when (e is CryptographicException or JsonException or FormatException)
+        catch (Exception e) when (e is CryptographicException or FormatException)
         {
             // Deletion has already committed. Corrupt credentials cannot be used or revoked.
             return null;
         }
     }
 
-    private string Encode(StoredSession state) => _protector.Protect(JsonSerializer.Serialize(state));
+    private string Encode(StoredSession state) => JWT.Encode(JsonSerializer.Serialize(state), _encryptionKey,
+        JweAlgorithm.PBES2_HS256_A128KW, JweEncryption.A256GCM);
+
+    private StoredSession? Decode(string value, string key)
+    {
+        try
+        {
+            var state = JsonSerializer.Deserialize<StoredSession>(JWT.Decrypt(value, _encryptionKey,
+                JweAlgorithm.PBES2_HS256_A128KW, JweEncryption.A256GCM));
+            // Bind the authenticated payload to its application, client and session ID.
+            return state?.SessionKey == key ? state : null;
+        }
+        catch (Exception e) when (e is JoseException or CryptographicException or JsonException or FormatException or ArgumentException)
+        {
+            // Invalid ciphertext is rejected and removed by CAS/GETDEL. Never log it.
+            return null;
+        }
+    }
+
     private TimeSpan Lifetime(StoredSession state)
         => (state.AbsoluteExpiresAt < state.IdleExpiresAt ? state.AbsoluteExpiresAt : state.IdleExpiresAt) - timeProvider.GetUtcNow();
     private static bool IsValidId(string id) => id.Length == 64 && id.All(char.IsAsciiHexDigitUpper);
 }
 
 internal sealed record StoredSession(string Ticket, DateTimeOffset AbsoluteExpiresAt, DateTimeOffset IdleExpiresAt,
-    string? RefreshOperation = null, DateTimeOffset? RefreshDeadline = null, DateTimeOffset? RefreshAt = null)
+    string SessionKey, string? RefreshOperation = null, DateTimeOffset? RefreshDeadline = null, DateTimeOffset? RefreshAt = null)
 {
     internal static DateTimeOffset CalculateRefreshAt(DateTimeOffset expiresAt, DateTimeOffset receivedAt)
         => expiresAt - TimeSpan.FromTicks(Math.Clamp((expiresAt - receivedAt).Ticks / 10, 0, TimeSpan.FromSeconds(30).Ticks));

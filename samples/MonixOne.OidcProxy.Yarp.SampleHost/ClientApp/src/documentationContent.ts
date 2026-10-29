@@ -120,6 +120,7 @@ export function createConfiguration(
       Bff: {
         ApplicationName: setup.application,
         KeyNamespace: setup.namespace,
+        EncryptionKey: "",
         Clients: Object.fromEntries(
           clients.map((client) => [
             client.name,
@@ -294,7 +295,7 @@ export const flows = {
       ],
       [
         "BFF → Redis → браузер",
-        "Framework проверяет ID token: подпись, issuer, audience, lifetime и nonce. Полный ticket с токенами защищается Data Protection и записывается в Redis. Браузеру выдаётся защищённая случайная ссылка в cookie, затем redirect к корню приложения.",
+        "Framework проверяет ID token: подпись, issuer, audience, lifetime и nonce. JSON сессии с полным ticket и токенами шифруется напрямую через jose-jwt ключом Bff:EncryptionKey и записывается в Redis как JWE. Браузеру выдаётся защищённая framework cookie со случайной ссылкой, затем redirect к корню приложения.",
         "Session cookie: Secure, HttpOnly, SameSite=Strict, Path=/, без Domain. Временные OIDC cookies имеют необходимые framework-настройки для внешнего callback.",
       ],
       [

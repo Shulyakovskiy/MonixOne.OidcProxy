@@ -29,6 +29,7 @@ public sealed class BffApplicationFactory(InfrastructureFixture infrastructure, 
     public static readonly Uri Origin = new("https://spa.example");
     public ManualClock Clock { get; } = new();
     public string KeyNamespace { get; } = keyNamespace ?? Guid.NewGuid().ToString("N");
+    public string? EncryptionKey { get; set; } = infrastructure.EncryptionKey;
     public Action<OidcProxyClientOptions>? ConfigureClientOptions { get; set; }
     public Action<OpenIdConnectOptions>? ConfigureOidc { get; set; }
     public string PathBase { get; set; } = string.Empty;
@@ -130,7 +131,7 @@ public sealed class BffApplicationFactory(InfrastructureFixture infrastructure, 
     {
         builder.ConfigureHostConfiguration(configuration =>
         {
-            var values = new Dictionary<string, string?>();
+            var values = new Dictionary<string, string?> { ["Bff:EncryptionKey"] = EncryptionKey };
             foreach (var client in _clients)
             {
                 var prefix = "Bff:Clients:" + client.Name + ":";

@@ -35,6 +35,7 @@ public sealed class PreparedConfigurationTests(InfrastructureFixture infrastruct
         configuration["Bff:Clients:adminidentity:PublicOrigin"] = "https://changed.example";
         configuration["Bff:Clients:adminidentity:PathBase"] = "/changed";
         configuration["Bff:Clients:adminidentity:OpenIdConnect:ClientId"] = "changed-client";
+        configuration["Bff:EncryptionKey"] = "invalid-reloaded-key";
         ((IConfigurationRoot)configuration).Reload();
         host.Services.GetRequiredService<IOptionsMonitorCache<OidcProxyClientOptions>>().TryRemove("adminidentity");
         host.Services.GetRequiredService<IOptionsMonitorCache<OpenIdConnectOptions>>()
@@ -50,6 +51,7 @@ public sealed class PreparedConfigurationTests(InfrastructureFixture infrastruct
         query["redirect_uri"].ToString().ShouldBe("https://admin-dev.intra-beetroute.ru/admin/.auth/login/callback");
         login.StatusCode.ShouldBe(HttpStatusCode.Redirect);
         api.StatusCode.ShouldBe(HttpStatusCode.OK);
+        (host.Services.GetRequiredService<IOptions<ProxyOptions>>().Value.EncryptionKey == infrastructure.EncryptionKey).ShouldBeTrue();
     }
 
     [Fact]
@@ -130,7 +132,8 @@ public sealed class PreparedConfigurationTests(InfrastructureFixture infrastruct
             builder.ConfigureHostConfiguration(configuration => configuration.AddInMemoryCollection(new Dictionary<string, string?>
             {
                 [HostDefaults.ContentRootKey] = ProfileRoot
-            }).AddJsonFile(Path.Combine(ProfileRoot, "appsettings.json")));
+            }).AddJsonFile(Path.Combine(ProfileRoot, "appsettings.json"))
+                .AddInMemoryCollection(new Dictionary<string, string?> { ["Bff:EncryptionKey"] = infrastructure.EncryptionKey }));
             return base.CreateHost(builder);
         }
     }

@@ -41,24 +41,31 @@ internal static class OidcAuthentication
                 };
                 cookie.Events.OnValidatePrincipal = async context =>
                 {
-                    if (context.HttpContext.RequestServices.GetRequiredService<BffClients>().Find(context.Request)?.Name != name)
+                    if (context.HttpContext.RequestServices.GetRequiredService<BffClients>().Find(context.Request)
+                            ?.Name != name)
                     {
                         context.RejectPrincipal();
                         return;
                     }
+
                     var id = context.Principal?.FindFirstValue(BffConstants.SessionClaim);
                     try
                     {
-                        var snapshot = id is null ? null : await context.HttpContext.RequestServices
-                            .GetRequiredKeyedService<SessionStore>(name).ReadAsync(id, context.HttpContext.RequestAborted);
+                        var snapshot = id is null
+                            ? null
+                            : await context.HttpContext.RequestServices
+                                .GetRequiredKeyedService<SessionStore>(name)
+                                .ReadAsync(id, context.HttpContext.RequestAborted);
                         if (snapshot is null) context.RejectPrincipal();
                         else
                         {
-                            context.ReplacePrincipal(SessionPrincipal.WithSessionId(snapshot.State.ReadTicket().Principal, id!));
+                            context.ReplacePrincipal(
+                                SessionPrincipal.WithSessionId(snapshot.State.ReadTicket().Principal, id!));
                             context.HttpContext.Items[BffConstants.SessionSnapshotItem] = (name, snapshot);
                         }
                     }
-                    catch (Exception e) when (e is RedisException or RedisTimeoutException or SessionUnavailableException)
+                    catch (Exception e) when (e is RedisException or RedisTimeoutException
+                                                  or SessionUnavailableException)
                     {
                         context.HttpContext.Items[typeof(SessionUnavailableException)] = true;
                         context.RejectPrincipal();
@@ -67,16 +74,19 @@ internal static class OidcAuthentication
                 cookie.Events.OnSigningOut = async context =>
                 {
                     var id = context.HttpContext.User.FindFirstValue(BffConstants.SessionClaim);
-                    if (id is not null && !Equals(context.HttpContext.Items[BffConstants.RemovedSessionItem], (name, id)))
+                    if (id is not null && !Equals(context.HttpContext.Items[BffConstants.RemovedSessionItem],
+                            (name, id)))
                     {
                         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
                         try
                         {
-                            await context.HttpContext.RequestServices.GetRequiredKeyedService<SessionStore>(name).RemoveAsync(id, timeout.Token);
+                            await context.HttpContext.RequestServices.GetRequiredKeyedService<SessionStore>(name)
+                                .RemoveAsync(id, timeout.Token);
                         }
                         catch (OperationCanceledException e) when (timeout.IsCancellationRequested)
                         {
-                            throw new SessionUnavailableException("Unable to confirm session invalidation within its server budget.", e);
+                            throw new SessionUnavailableException(
+                                "Unable to confirm session invalidation within its server budget.", e);
                         }
                     }
                 };
@@ -88,11 +98,13 @@ internal static class OidcAuthentication
                 configureOidc(oidc);
             });
         services.AddOptions<CookieAuthenticationOptions>(OidcProxyDefaults.CookieScheme(name))
-            .Configure<IOptionsMonitor<OidcProxyClientOptions>>((cookie, options) => cookie.ExpireTimeSpan = options.Get(name).SessionAbsoluteTimeout);
+            .Configure<IOptionsMonitor<OidcProxyClientOptions>>((cookie, options) =>
+                cookie.ExpireTimeSpan = options.Get(name).SessionAbsoluteTimeout);
         services.AddOptions<OpenIdConnectOptions>(OidcProxyDefaults.OpenIdConnectScheme(name))
-            .Configure<IOptionsMonitor<OidcProxyClientOptions>>((oidc, options) => ConfigureProtocolEvents(oidc, name, options.Get(name)))
-            .Validate(o => Uri.TryCreate(o.Authority, UriKind.Absolute, out var authority) && authority.Scheme == "https" &&
-                authority.UserInfo.Length == 0 && authority.Query.Length == 0 && authority.Fragment.Length == 0,
+            .Configure<IOptionsMonitor<OidcProxyClientOptions>>((oidc, options) =>
+                ConfigureProtocolEvents(oidc, name, options.Get(name)))
+            .Validate(o => Uri.TryCreate(o.Authority, UriKind.Absolute, out var authority) &&
+                           authority is { Scheme: "https", UserInfo.Length: 0, Query.Length: 0, Fragment.Length: 0 },
                 "An HTTPS OIDC Authority without credentials, query or fragment is required.")
             .Validate(o => !string.IsNullOrWhiteSpace(o.ClientId) && !string.IsNullOrWhiteSpace(o.ClientSecret),
                 "A confidential OIDC ClientId and ClientSecret are required.")
@@ -130,11 +142,13 @@ internal static class OidcAuthentication
                 context.Fail("An ID token with a validated signature is required.");
                 return;
             }
+
             // Preserve protocol values before framework claim actions remove nonce.
             // The validated inner token also supports signed-and-encrypted ID tokens.
             context.Properties!.Items[BffConstants.OriginalNonce] = context.SecurityToken.Payload.Nonce;
             if (context.SecurityToken.Payload.TryGetValue("auth_time", out var authTime))
-                context.Properties.Items[BffConstants.OriginalAuthTime] = Convert.ToString(authTime, CultureInfo.InvariantCulture);
+                context.Properties.Items[BffConstants.OriginalAuthTime] =
+                    Convert.ToString(authTime, CultureInfo.InvariantCulture);
             await validated(context);
         };
         var redirect = oidc.Events.OnRedirectToIdentityProvider;
@@ -142,13 +156,15 @@ internal static class OidcAuthentication
         {
             await redirect(context);
             context.ProtocolMessage.RedirectUri = UriHelper.BuildAbsolute(options.PublicOrigin!.Scheme,
-                HostString.FromUriComponent(options.PublicOrigin.Authority), PathString.FromUriComponent(options.PathBase), OidcProxyRoutes.LoginCallback);
+                HostString.FromUriComponent(options.PublicOrigin.Authority),
+                PathString.FromUriComponent(options.PathBase), OidcProxyRoutes.LoginCallback);
         };
         oidc.Events.OnRedirectToIdentityProviderForSignOut = context =>
         {
             context.ProtocolMessage.ClientId = oidc.ClientId;
             context.ProtocolMessage.PostLogoutRedirectUri = UriHelper.BuildAbsolute(options.PublicOrigin!.Scheme,
-                HostString.FromUriComponent(options.PublicOrigin.Authority), PathString.FromUriComponent(options.PathBase), oidc.SignedOutCallbackPath);
+                HostString.FromUriComponent(options.PublicOrigin.Authority),
+                PathString.FromUriComponent(options.PathBase), oidc.SignedOutCallbackPath);
             context.ProtocolMessage.IdTokenHint = context.HttpContext.Items[BffConstants.LogoutIdTokenItem] as string;
             return Task.CompletedTask;
         };
@@ -158,11 +174,13 @@ internal static class OidcAuthentication
             // The provider has already issued credentials. Retain the known refresh
             // token only for this request so a later protocol failure can revoke it.
             if (!string.IsNullOrEmpty(context.TokenEndpointResponse.RefreshToken))
-                context.HttpContext.Items[BffConstants.SignInRefreshTokenItem] = context.TokenEndpointResponse.RefreshToken;
+                context.HttpContext.Items[BffConstants.SignInRefreshTokenItem] =
+                    context.TokenEndpointResponse.RefreshToken;
             await tokenResponse(context);
             if (string.IsNullOrWhiteSpace(context.TokenEndpointResponse.AccessToken) ||
                 !string.Equals(context.TokenEndpointResponse.TokenType, "Bearer", StringComparison.OrdinalIgnoreCase) ||
-                !long.TryParse(context.TokenEndpointResponse.ExpiresIn, NumberStyles.None, CultureInfo.InvariantCulture, out var seconds) ||
+                !long.TryParse(context.TokenEndpointResponse.ExpiresIn, NumberStyles.None, CultureInfo.InvariantCulture,
+                    out var seconds) ||
                 seconds <= 0 || seconds > int.MaxValue)
                 context.Fail("Invalid token endpoint response.");
         };
@@ -174,11 +192,13 @@ internal static class OidcAuthentication
             // These operations can outlive an aborted request or host shutdown.
             // Capture cleanup dependencies before starting the server-owned SET.
             var tokens = services.GetRequiredKeyedService<TokenSession>(name);
-            var sessionLogger = services.GetRequiredService<ILoggerFactory>().CreateLogger("MonixOne.OidcProxy.Yarp.Session");
+            var sessionLogger = services.GetRequiredService<ILoggerFactory>()
+                .CreateLogger("MonixOne.OidcProxy.Yarp.Session");
             var properties = context.Properties!;
             properties.Items.TryGetValue(BffConstants.PreviousSession, out var previousId);
             properties.Items.Remove(BffConstants.PreviousSession);
-            var fullTicket = new AuthenticationTicket(context.Principal!, properties, OidcProxyDefaults.CookieScheme(name));
+            var fullTicket =
+                new AuthenticationTicket(context.Principal!, properties, OidcProxyDefaults.CookieScheme(name));
             // From here the ticket creation/cleanup block owns these credentials.
             context.HttpContext.Items.Remove(BffConstants.SignInRefreshTokenItem);
             string? id = null;
@@ -193,6 +213,7 @@ internal static class OidcAuthentication
                     if (previousTicket is not null)
                         await tokens.RevokeAsync(previousTicket, CancellationToken.None);
                 }
+
                 // The cookie receives only a framework-protected random reference.
                 context.Principal = new ClaimsPrincipal(new ClaimsIdentity(
                     [new Claim(BffConstants.SessionClaim, id)], OidcProxyDefaults.CookieScheme(name)));
@@ -206,12 +227,18 @@ internal static class OidcAuthentication
                 if (id is not null)
                 {
                     using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-                    try { await store.RemoveAsync(id, timeout.Token); }
-                    catch (Exception e) when (e is RedisException or RedisTimeoutException or OperationCanceledException or ObjectDisposedException)
+                    try
                     {
-                        sessionLogger.LogError("Unable to remove failed sign-in session. Failure type: {FailureType}", e.GetType().Name);
+                        await store.RemoveAsync(id, timeout.Token);
+                    }
+                    catch (Exception e) when (e is RedisException or RedisTimeoutException or OperationCanceledException
+                                                  or ObjectDisposedException)
+                    {
+                        sessionLogger.LogError("Unable to remove failed sign-in session. Failure type: {FailureType}",
+                            e.GetType().Name);
                     }
                 }
+
                 await tokens.RevokeAsync(fullTicket, CancellationToken.None);
                 if (failure is RedisException or RedisTimeoutException or SessionUnavailableException)
                 {
@@ -220,9 +247,11 @@ internal static class OidcAuthentication
                     context.HandleResponse();
                     context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
                     context.Response.Headers.CacheControl = "no-store";
-                    sessionLogger.LogWarning("OIDC session creation failed. Failure type: {FailureType}", failure.GetType().Name);
+                    sessionLogger.LogWarning("OIDC session creation failed. Failure type: {FailureType}",
+                        failure.GetType().Name);
                     return;
                 }
+
                 throw;
             }
         };
@@ -230,11 +259,13 @@ internal static class OidcAuthentication
         oidc.Events.OnRemoteFailure = async context =>
         {
             context.HandleResponse();
-            if (context.HttpContext.Items.Remove(BffConstants.SignInRefreshTokenItem, out var issued) && issued is string refreshToken)
+            if (context.HttpContext.Items.Remove(BffConstants.SignInRefreshTokenItem, out var issued) &&
+                issued is string refreshToken)
             {
                 await context.HttpContext.RequestServices.GetRequiredKeyedService<TokenSession>(name)
                     .RevokeAsync(refreshToken, CancellationToken.None);
             }
+
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
             for (var failure = context.Failure; failure is not null; failure = failure.InnerException)
                 if (failure is RedisException or RedisTimeoutException or SessionUnavailableException)
@@ -242,10 +273,11 @@ internal static class OidcAuthentication
                     context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
                     break;
                 }
+
             context.Response.Headers.CacheControl = "no-store";
             context.HttpContext.RequestServices.GetRequiredService<ILoggerFactory>()
-                .CreateLogger("MonixOne.OidcProxy.Yarp.Oidc").LogWarning("OIDC sign-in failed. Failure type: {FailureType}", context.Failure?.GetType().Name);
+                .CreateLogger("MonixOne.OidcProxy.Yarp.Oidc")
+                .LogWarning("OIDC sign-in failed. Failure type: {FailureType}", context.Failure?.GetType().Name);
         };
     }
-
 }

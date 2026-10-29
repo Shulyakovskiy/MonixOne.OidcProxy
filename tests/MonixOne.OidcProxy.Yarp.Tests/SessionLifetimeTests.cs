@@ -1,6 +1,6 @@
 using System.Net;
 using System.Text.Json.Nodes;
-using Microsoft.AspNetCore.DataProtection;
+using Jose;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -73,9 +73,9 @@ public sealed class SessionLifetimeTests(InfrastructureFixture infrastructure)
     }
 
     [Fact]
-    public async Task Session_PreviousV6RecordWithoutRefreshAt_RemainsUsableAndMigratesOnActivity()
+    public async Task Session_JweRecordWithoutRefreshAt_CalculatesThresholdOnActivity()
     {
-        // Arrange: reproduce the persisted v6 format, without changing its protector.
+        // Arrange: RefreshAt is optional; the JWE and session binding remain valid.
         var ct = TestContext.Current.CancellationToken;
         using var identity = new OidcWireMock(infrastructure);
         await using var host = identity.CreateBff();
@@ -85,12 +85,12 @@ public sealed class SessionLifetimeTests(InfrastructureFixture infrastructure)
         var server = infrastructure.Connection.GetServer(infrastructure.Connection.GetEndPoints().Single());
         var key = server.Keys(pattern: "test-spa:testing:" + host.KeyNamespace + ":spa:sessions:*").Single();
         var database = infrastructure.Connection.GetDatabase();
-        var protector = host.Services.GetRequiredService<IDataProtectionProvider>()
-            .CreateProtector("MonixOne.OidcProxy.Yarp.ServerSession.v6", OidcProxyDefaults.CookieName("spa"));
-        var payload = JsonNode.Parse(protector.Unprotect((string)(await database.StringGetAsync(key))!))!;
+        var payload = JsonNode.Parse(JWT.Decrypt((string)(await database.StringGetAsync(key))!,
+            infrastructure.EncryptionKey, JweAlgorithm.PBES2_HS256_A128KW, JweEncryption.A256GCM))!;
         payload.AsObject().Remove("RefreshAt");
         var ttl = await database.KeyTimeToLiveAsync(key) ?? throw new InvalidOperationException("Fixture session must have a TTL.");
-        await database.StringSetAsync(key, protector.Protect(payload.ToJsonString()), ttl);
+        await database.StringSetAsync(key, JWT.Encode(payload.ToJsonString(), infrastructure.EncryptionKey,
+            JweAlgorithm.PBES2_HS256_A128KW, JweEncryption.A256GCM), ttl);
 
         // Act
         using var initial = await browser.ApiAsync(cancellationToken: ct);
