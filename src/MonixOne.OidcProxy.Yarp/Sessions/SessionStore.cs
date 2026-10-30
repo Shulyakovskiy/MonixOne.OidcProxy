@@ -45,10 +45,18 @@ internal sealed class SessionStore(
         var now = timeProvider.GetUtcNow();
         var id = RandomNumberGenerator.GetHexString(64);
         var key = client.RedisKeyPrefix + "sessions:" + id;
+        var absoluteTimeout = ticket.Properties.IsPersistent
+            ? client.Options.RememberedSessionTimeout
+            : client.Options.SessionAbsoluteTimeout;
         var state = new StoredSession(
             Convert.ToBase64String(TicketSerializer.Default.Serialize(ticket)),
-            now + client.Options.SessionAbsoluteTimeout,
-            now + client.Options.SessionIdleTimeout,
+            now + absoluteTimeout,
+            now
+                + (
+                    ticket.Properties.IsPersistent
+                        ? absoluteTimeout
+                        : client.Options.SessionIdleTimeout
+                ),
             key,
             RefreshAt: StoredSession.CalculateRefreshAt(
                 DateTimeOffset.Parse(

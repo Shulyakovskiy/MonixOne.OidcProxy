@@ -28,6 +28,13 @@ public sealed class OidcProxyClientOptions
     public TimeSpan SessionAbsoluteTimeout { get; set; } = TimeSpan.FromHours(8);
 
     /// <summary>
+    /// The fixed cookie and server-session lifetime when login explicitly requests
+    /// rememberMe=true. Remembered sessions have no shorter inactivity deadline;
+    /// refresh and activity never extend this absolute limit.
+    /// </summary>
+    public TimeSpan RememberedSessionTimeout { get; set; } = TimeSpan.FromDays(30);
+
+    /// <summary>
     /// Forwards backend cookies with names isolated by client and YARP cluster.
     /// Backend paths are enforced during forwarding and expiry is retained.
     /// Browser cookies use __Host-Http-, Path=/, Secure and HttpOnly without Domain.

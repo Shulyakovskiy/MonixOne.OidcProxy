@@ -6,6 +6,14 @@ BFF для SPA на .NET 10: ASP.NET Core OpenID Connect, YARP и Redis.
 OAuth-токены хранятся в зашифрованных серверных сессиях; браузер получает HttpOnly cookie.
 Native API, их JWT policies и балансировка работают в том же GW.
 
+Обычный вход выдаёт сессионную cookie и сохраняет прежние idle/absolute лимиты.
+Для явного «Запомнить» SPA передаёт `rememberMe=true` в `/.auth/login` вместе с
+локальным `returnUrl`. Стандартный защищённый OIDC state сохраняет выбор до callback.
+Постоянная cookie и зашифрованная Redis-сессия действуют максимум 30 дней без
+более короткого idle-лимита; refresh и активность этот срок не продлевают.
+Срок настраивается через `Bff:Clients:<client>:RememberedSessionTimeout`.
+Logout, отзыв доступа и истечение refresh token могут завершить вход раньше.
+
 ```csharp
 builder.Services.AddOidcProxy(builder.Configuration);
 // После builder.Build():
