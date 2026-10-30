@@ -1,37 +1,37 @@
 <Project Sdk="Microsoft.NET.Sdk">
-    <PropertyGroup>
-        <PackageId>MonixOne.OidcProxy.Yarp</PackageId>
-        <Title>MonixOne.OidcProxy.Yarp</Title>
-        <RootNamespace>MonixOne.OidcProxy.Yarp</RootNamespace>
-        <PackageTags>aspnetcore;bff;spa;yarp;oauth2;openid-connect;openiddict;redis</PackageTags>
-        <PackageIcon>nuget-icon.png</PackageIcon>
-        <Version>8.0.0</Version>
-        <Authors>Albert Starreveld; Shulyakovsky.E</Authors>
-        <Company>MonixOne</Company>
-        <Copyright>MonixOne contributors; upstream copyright retained</Copyright>
-        <Description>A .NET 10 Backend-for-Frontend for single-page applications using YARP and standard OpenID Connect. Encrypts Redis session data directly with jose-jwt, forwards user access tokens to configured APIs, and coordinates refresh and logout across replicas. Compatible with OpenIddict.</Description>
-        <RepositoryType>git</RepositoryType>
-        <PublishRepositoryUrl>true</PublishRepositoryUrl>
-        <GenerateDocumentationFile>true</GenerateDocumentationFile>
-        <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
-        <IncludeSymbols>true</IncludeSymbols>
-        <SymbolPackageFormat>snupkg</SymbolPackageFormat>
-        <RepositoryUrl>https://github.com/Shulyakovskiy/MonixOne.OidcProxy.Yarp</RepositoryUrl>
-        <PackageProjectUrl>https://github.com/Shulyakovskiy/MonixOne.OidcProxy.Yarp</PackageProjectUrl>
-        <PackageLicenseExpression>LGPL-3.0-only</PackageLicenseExpression>
-        <PackageReadmeFile>README.md</PackageReadmeFile>
-        <PackageReleaseNotes>Breaking: pass the root IConfiguration to AddOidcProxy. The package configures YARP, Redis and trusted forwarded headers automatically. Move OidcProxy.Client and OidcProxy.CookiePolicy metadata to Bff:Clients:&lt;client&gt;:Routes, using AllowAnonymous and CookiePolicy. Native ReverseProxy configuration stays separate. Explicit internal HTTP destinations are supported behind TLS termination; public origins and OIDC Authority remain HTTPS. The encrypted session format remains compatible with 7.0.0. Documentation and the sample host are simplified.</PackageReleaseNotes>
-    </PropertyGroup>
-    <ItemGroup>
-        <FrameworkReference Include="Microsoft.AspNetCore.App" />
-        <PackageReference Include="jose-jwt" />
-        <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" />
-        <PackageReference Include="Microsoft.AspNetCore.DataProtection.StackExchangeRedis" />
-        <PackageReference Include="Duende.IdentityModel" />
-        <PackageReference Include="Yarp.ReverseProxy" />
-        <PackageReference Include="StackExchange.Redis" />
-        <None Include="../../assets/NuGet.md" Pack="true" PackagePath="/README.md" />
-        <None Include="../../assets/nuget-icon.png" Link="nuget-icon.png" Pack="true" PackagePath="/" />
-        <None Include="../../license.txt" Pack="true" PackagePath="/" />
-    </ItemGroup>
+  <PropertyGroup>
+    <PackageId>MonixOne.OidcProxy.Yarp</PackageId>
+    <Title>MonixOne.OidcProxy.Yarp</Title>
+    <RootNamespace>MonixOne.OidcProxy.Yarp</RootNamespace>
+    <PackageTags>aspnetcore;bff;spa;yarp;oauth2;openid-connect;openiddict;redis</PackageTags>
+    <PackageIcon>nuget-icon.png</PackageIcon>
+    <Version>8.1.2</Version>
+    <Authors>Albert Starreveld; Shulyakovsky.E</Authors>
+    <Company>MonixOne</Company>
+    <Copyright>MonixOne contributors; upstream copyright retained</Copyright>
+    <Description>A .NET 10 Backend-for-Frontend for single-page applications using YARP and standard OpenID Connect. Encrypts Redis session data directly with jose-jwt, forwards user access tokens to configured APIs, and coordinates refresh and logout across replicas. Compatible with OpenIddict.</Description>
+    <RepositoryType>git</RepositoryType>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <RepositoryUrl>https://github.com/Shulyakovskiy/MonixOne.OidcProxy.Yarp</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/Shulyakovskiy/MonixOne.OidcProxy.Yarp</PackageProjectUrl>
+    <PackageLicenseExpression>LGPL-3.0-only</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageReleaseNotes>SPA activation requires PublicOrigin: an orphaned client secret no longer enables BFF. Native YARP works without SPA profiles or BFF secrets. Package-owned named CORS policy preserves host middleware order. Existing Redis instances and ownership are retained across service aliases. Unified native/BFF routing and gateway trace propagation are supported. Backend cookies are isolated by client and cluster using __Host-Http- cookies with Path=/ and server-side backend path validation. Legacy __Secure- bridge cookies are ignored; restart pending OAuth connections after upgrading all replicas.</PackageReleaseNotes>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="jose-jwt" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" />
+    <PackageReference Include="Microsoft.AspNetCore.DataProtection.StackExchangeRedis" />
+    <PackageReference Include="Duende.IdentityModel" />
+    <PackageReference Include="Yarp.ReverseProxy" />
+    <PackageReference Include="StackExchange.Redis" />
+    <None Include="../../assets/NuGet.md" Pack="true" PackagePath="/README.md" />
+    <None Include="../../assets/nuget-icon.png" Link="nuget-icon.png" Pack="true" PackagePath="/" />
+    <None Include="../../license.txt" Pack="true" PackagePath="/" />
+  </ItemGroup>
 </Project>

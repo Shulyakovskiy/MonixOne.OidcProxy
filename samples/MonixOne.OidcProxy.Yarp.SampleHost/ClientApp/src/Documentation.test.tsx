@@ -1,263 +1,299 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import Documentation from "./Documentation";
 import {
   createConfiguration,
-  initialSetup,
-  validateSetup,
-  validateClients,
   createCookieConfiguration,
+  initialSetup,
+  validateClients,
+  validateSetup,
 } from "./documentationContent";
+import {
+  inspectRoute,
+  presets,
+  type RouteScenario,
+} from "./documentationModel";
 
+beforeEach(() => window.history.replaceState(null, "", "/docs"));
 afterEach(() => vi.unstubAllGlobals());
+const configRegion = () =>
+  screen.getByRole("region", { name: "appsettings.json — без секретов" });
+const scenario: RouteScenario = {
+  profile: true,
+  route: "bff-api",
+  session: true,
+  csrf: true,
+  foreign: false,
+  bearer: true,
+  scope: true,
+  redis: true,
+};
 
-it("accepts an internal HTTP backend while keeping BFF settings separate from YARP", () => {
-  // Arrange
-  const setup = { ...initialSetup, api: "http://resource-api:8000/" };
-  // Act
-  const config = JSON.parse(createConfiguration(setup));
-  // Assert
-  expect(validateSetup(setup)).toEqual([]);
-  expect(
-    config.ReverseProxy.Clusters["spa-resource-api"].Destinations.primary
-      .Address,
-  ).toBe(setup.api);
-  expect(config.ReverseProxy.Routes["spa-api"].Metadata).toBeUndefined();
-  expect(config.Bff.Clients.spa.Routes["spa-api"].AllowAnonymous).toBe(false);
-});
-
-it.each(["origin", "authority"] as const)(
-  "rejects HTTP for the public %s",
-  (field) => {
-    // Arrange
-    const setup = { ...initialSetup, [field]: "http://public.example" };
-    // Act
-    const errors = validateSetup(setup);
-    // Assert
-    expect(errors.some((error) => error.includes("HTTPS URL"))).toBe(true);
-  },
-);
-
-it("rejects an unsafe public origin before generating configuration", () => {
-  // Arrange
-  render(<Documentation />);
-  // Act
-  fireEvent.change(screen.getByLabelText("SPA / BFF origin"), {
-    target: { value: "https://user:secret@spa.example/path" },
-  });
-  // Assert
-  expect(screen.getByRole("alert")).toHaveTextContent("без credentials");
-  fireEvent.click(screen.getByRole("button", { name: /04.*Хост и YARP/ }));
-  expect(screen.getByRole("alert")).toHaveTextContent(
-    "Сначала исправьте параметры",
-  );
-  expect(
-    screen.queryByRole("region", { name: "appsettings.json — без секретов" }),
-  ).toBeNull();
-});
-
-it("generates valid server configuration without secret fields", () => {
-  // Arrange
+it("generates one native YARP configuration, without duplicate BFF bindings or secrets", () => {
   const setup = {
     ...initialSetup,
     clientId: 'portal"quoted',
     namespace: "frontend",
   };
-  // Act
-  const configuration = JSON.parse(createConfiguration(setup));
-  // Assert
+  const config = JSON.parse(createConfiguration(setup));
   expect(validateSetup(setup)).toEqual([]);
-  expect(configuration.Bff.Clients.spa.OpenIdConnect.ClientId).toBe(
-    setup.clientId,
+  expect(config.Bff.Clients.spa.OpenIdConnect.ClientId).toBe(setup.clientId);
+  expect(config.Bff.Clients.spa.OpenIdConnect.ClientSecret).toBeUndefined();
+  expect(config.Bff.EncryptionKey).toBeUndefined();
+  expect(config.ConnectionStrings).toBeUndefined();
+  expect(config.Bff.KeyNamespace).toBe("frontend");
+  expect(config.Bff.RedisConnectionStringKey).toBe(
+    "RateLimiting:RedisConnectionString",
   );
+  expect(config.Bff.Clients.spa.Routes).toBeUndefined();
+  expect(config.ReverseProxy.Routes["spa-api"].Match).toEqual({
+    Hosts: ["spa.example.com"],
+    Path: "/api/{**all}",
+  });
   expect(
-    configuration.Bff.Clients.spa.OpenIdConnect.ClientSecret,
-  ).toBeUndefined();
-  expect(configuration.ConnectionStrings).toBeUndefined();
-  expect(configuration.Bff.KeyNamespace).toBe("frontend");
-  expect(
-    configuration.ReverseProxy.Clusters["spa-resource-api"].Destinations.primary
+    config.ReverseProxy.Clusters["spa-resource-api"].Destinations.primary
       .Address,
   ).toBe(setup.api);
 });
 
-it("updates callback URIs without network requests or browser storage", () => {
-  // Arrange
+it.each(["origin", "authority"] as const)(
+  "rejects public HTTP for %s",
+  (field) => {
+    expect(
+      validateSetup({
+        ...initialSetup,
+        [field]: "http://public.example",
+      }).some((error) => error.includes("HTTPS URL")),
+    ).toBe(true);
+  },
+);
+
+it.each(["/api/", "/api//users", "api", "/api?secret", "/../api"])(
+  "rejects unsafe API path %s",
+  (apiPath) => {
+    expect(validateSetup({ ...initialSetup, apiPath }).length).toBeGreaterThan(
+      0,
+    );
+  },
+);
+
+it("hides generated configuration for unsafe URLs", () => {
+  render(<Documentation />);
+  fireEvent.change(screen.getByLabelText("SPA / BFF origin"), {
+    target: { value: "https://user:password@spa.example/path" },
+  });
+  expect(screen.getByRole("alert")).toHaveTextContent("без credentials");
+  expect(
+    screen.queryByRole("region", {
+      name: "appsettings.json — без секретов",
+    }),
+  ).toBeNull();
+});
+
+it("updates mounted callback URIs and SPA code without requests or storage", () => {
   const fetchMock = vi.fn();
   vi.stubGlobal("fetch", fetchMock);
   render(<Documentation />);
-  // Act
   fireEvent.change(screen.getByLabelText("SPA / BFF origin"), {
     target: { value: "https://portal.example:8443" },
   });
-  fireEvent.click(screen.getByRole("button", { name: /02.*OpenID Provider/ }));
-  // Assert
+  fireEvent.change(screen.getByLabelText("PathBase"), {
+    target: { value: "/workspace/portal" },
+  });
   expect(
-    within(screen.getByRole("region", { name: "Redirect URI" })).getByText(
-      "https://portal.example:8443/.auth/login/callback",
+    within(
+      screen.getByRole("region", { name: "Redirect URI · spa" }),
+    ).getByText(
+      "https://portal.example:8443/workspace/portal/.auth/login/callback",
     ),
   ).toBeVisible();
   expect(
     within(
-      screen.getByRole("region", { name: "Post logout redirect URI" }),
-    ).getByText("https://portal.example:8443/.auth/signout-callback"),
+      screen.getByRole("region", {
+        name: "Post logout redirect URI · spa",
+      }),
+    ).getByText(
+      "https://portal.example:8443/workspace/portal/.auth/signout-callback",
+    ),
   ).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "SPA-клиент" }));
+  expect(
+    screen.getByRole("region", { name: "Login и чтение сессии" }),
+  ).toHaveTextContent("/workspace/portal/.auth/me");
   expect(fetchMock).not.toHaveBeenCalled();
   expect(localStorage.length).toBe(0);
   expect(sessionStorage.length).toBe(0);
 });
 
-it("navigates refresh and logout stages and explains the race", () => {
-  // Arrange
+it("selects Local and Dev presets with distinct public callbacks", () => {
   render(<Documentation />);
-  // Act
-  fireEvent.click(
-    screen.getByRole("button", { name: /02 · Как работает SPA/ }),
+  fireEvent.click(screen.getByRole("button", { name: "Admin · Local" }));
+  expect(configRegion()).toHaveTextContent('"PathBase": "/admin"');
+  expect(configRegion()).toHaveTextContent('"Path": "/calendar-api/{**all}"');
+  expect(
+    screen.getByRole("region", { name: "Redirect URI · admin-identity" }),
+  ).toHaveTextContent("https://localhost:8443/admin/.auth/login/callback");
+  fireEvent.click(screen.getByRole("button", { name: "Admin · Dev" }));
+  expect(
+    screen.getByRole("region", { name: "Redirect URI · admin-identity" }),
+  ).toHaveTextContent(
+    "https://admin.id-dev.intra-beetroute.ru/admin/.auth/login/callback",
   );
-  fireEvent.click(screen.getByRole("button", { name: "Продление" }));
-  fireEvent.click(screen.getByRole("button", { name: /4.*BFF → Redis, CAS/ }));
-  // Assert
-  expect(screen.getByText(/Logout удалил запись/)).toBeVisible();
-  // Act
-  fireEvent.click(screen.getByRole("button", { name: "Выход" }));
-  fireEvent.click(
-    screen.getByRole("button", { name: /2.*BFF → Redis GETDEL/ }),
-  );
-  // Assert
-  expect(screen.getByText(/на момент удаления/)).toBeVisible();
+  expect(configRegion()).not.toHaveTextContent("localhost");
 });
 
-it("generates a mounted SPA configuration and matching callback URIs", () => {
-  // Arrange
+it("supports native GW without SPA settings or encryption/client secrets", () => {
   render(<Documentation />);
-  // Act
-  fireEvent.change(screen.getByLabelText("PathBase (пусто для корня)"), {
-    target: { value: "/workspace/portal" },
+  fireEvent.change(screen.getByLabelText("OIDC Authority"), {
+    target: { value: "" },
   });
-  fireEvent.click(screen.getByRole("button", { name: /02.*OpenID Provider/ }));
-  // Assert
+  fireEvent.click(
+    screen.getByRole("checkbox", { name: "Без SPA / native GW" }),
+  );
+  const config = JSON.parse(configRegion().querySelector("code")!.textContent!);
+  expect(config.Bff.Clients).toBeUndefined();
+  expect(config.ReverseProxy.Routes["spa-api"].Match.Hosts).toBeUndefined();
   expect(
-    within(screen.getByRole("region", { name: "Redirect URI" })).getByText(
-      "https://spa.example.com/workspace/portal/.auth/login/callback",
-    ),
-  ).toBeVisible();
-  // Act
-  fireEvent.click(screen.getByRole("button", { name: /04.*Хост и YARP/ }));
-  // Assert
-  expect(
-    screen.getByRole("region", { name: "appsettings.json — без секретов" }),
-  ).toHaveTextContent('"PathBase": "/workspace/portal"');
-  // Act
-  fireEvent.click(screen.getByRole("button", { name: /05.*React SPA/ }));
-  // Assert
-  expect(
-    screen.getByRole("region", { name: "Login и чтение сессии" }),
-  ).toHaveTextContent("/workspace/portal/.auth/me");
+    screen.queryByRole("heading", { name: "3. Регистрация в Identity" }),
+  ).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Секреты" }));
+  const secrets = screen.getByRole("region", {
+    name: "Environment / secret provider",
+  });
+  expect(secrets).toHaveTextContent("RateLimiting__RedisConnectionString");
+  expect(secrets).not.toHaveTextContent("EncryptionKey");
+  expect(secrets).not.toHaveTextContent("ClientSecret");
 });
 
-it("generates independent clients and exact YARP host bindings", () => {
-  // Arrange
+it("generates independent clients with exact host/port bindings", () => {
   const second = {
     ...initialSetup,
     name: "workspace",
     origin: "https://workspace.example:8443",
-    clientId: "workspace-bff",
     pathBase: "/app",
   };
-  // Act
-  const configuration = JSON.parse(createConfiguration(initialSetup, [second]));
-  // Assert
+  const config = JSON.parse(createConfiguration(initialSetup, [second]));
   expect(validateClients(initialSetup, [second])).toEqual([]);
-  expect(Object.keys(configuration.Bff.Clients)).toEqual(["spa", "workspace"]);
-  expect(configuration.Bff.Clients.workspace.OpenIdConnect.ClientId).toBe(
-    "workspace-bff",
-  );
-  expect(
-    configuration.ReverseProxy.Routes["workspace-api"].Match.Hosts,
-  ).toEqual(["workspace.example:8443"]);
-  expect(
-    configuration.Bff.Clients.workspace.Routes["workspace-api"].AllowAnonymous,
-  ).toBe(false);
-  expect(
-    configuration.ReverseProxy.Routes["workspace-api"].Metadata,
-  ).toBeUndefined();
-  expect(configuration.Bff.Clients.workspace.PathBase).toBe("/app");
-  expect(configuration.ForwardedHeaders.AllowedHosts).toEqual([
+  expect(config.ReverseProxy.Routes["workspace-api"].Match.Hosts).toEqual([
+    "workspace.example:8443",
+  ]);
+  expect(config.Bff.Clients.workspace.PathBase).toBe("/app");
+  expect(config.Bff.Clients.workspace.Routes).toBeUndefined();
+  expect(config.ForwardedHeaders.AllowedHosts).toEqual([
     "spa.example.com",
     "workspace.example",
   ]);
-  expect(configuration.AllowedHosts).toBe("spa.example.com;workspace.example");
 });
 
-it("rejects duplicate effective origins and client names", () => {
-  // Arrange
-  const second = { ...initialSetup, origin: "https://spa.example.com:443" };
-  // Act
-  const errors = validateClients(initialSetup, [second]);
-  // Assert
+it("rejects duplicate effective origins and names", () => {
+  const errors = validateClients(initialSetup, [
+    { ...initialSetup, origin: "https://spa.example.com:443" },
+  ]);
   expect(errors).toContain("Client names должны быть уникальны.");
   expect(errors.some((error) => error.includes("отдельный origin"))).toBe(true);
 });
 
-it("adds a second SPA and shows its own callback URI", () => {
-  // Arrange
+it("adds and removes clients without reusing an existing default name", () => {
   render(<Documentation />);
-  // Act
-  fireEvent.click(screen.getByRole("button", { name: "Добавить SPA" }));
-  fireEvent.change(screen.getByLabelText("SPA 2 · SPA / BFF origin"), {
-    target: { value: "https://workspace.example" },
-  });
-  fireEvent.click(screen.getByRole("button", { name: /02.*OpenID Provider/ }));
-  // Assert
-  expect(
-    within(
-      screen.getByRole("region", { name: "Redirect URI · spa2" }),
-    ).getByText("https://workspace.example/.auth/login/callback"),
-  ).toBeVisible();
+  const add = screen.getByRole("button", { name: /Добавить SPA/ });
+  fireEvent.click(add);
+  fireEvent.click(add);
+  fireEvent.click(screen.getByRole("button", { name: "Удалить SPA 2" }));
+  fireEvent.click(add);
+  const config = JSON.parse(configRegion().querySelector("code")!.textContent!);
+  expect(Object.keys(config.Bff.Clients)).toEqual(["spa", "spa3", "spa2"]);
+  expect(screen.queryByRole("alert")).toBeNull();
 });
 
-it("generates a cluster-bound Calendar cookie policy with only the callback anonymous", () => {
-  // Arrange
-  const setup = { ...initialSetup, name: "adminidentity", pathBase: "/admin" };
-  // Act
+it("generates a cookie bridge with only the exact GET callback anonymous", () => {
+  const setup = presets.local!.setup;
   const config = JSON.parse(createCookieConfiguration(setup));
-  // Assert
-  const policy =
-    config.Bff.Clients.adminidentity.CookiePolicies["calendar-google"];
-  expect(policy.Names).toEqual(["calendar_google_state"]);
-  expect(policy.Path).toBe("/calendar-api/connections/google/callback");
-  expect(
-    config.ReverseProxy.Routes["google-start"].AuthorizationPolicy,
-  ).toBeUndefined();
-  expect(
-    config.Bff.Clients.adminidentity.Routes["google-callback"].AllowAnonymous,
-  ).toBe(true);
-  expect(
-    config.Bff.Clients.adminidentity.Routes["google-start"].AllowAnonymous,
-  ).toBe(false);
-  expect(
-    config.ReverseProxy.Routes["google-callback"].AuthorizationPolicy,
-  ).toBeUndefined();
-  expect(config.ReverseProxy.Routes["google-callback"].ClusterId).toBe(
-    policy.ClusterId,
-  );
-  expect(
-    config.Bff.Clients.adminidentity.Routes["google-start"].CookiePolicy,
-  ).toBe("calendar-google");
-  expect(config.ReverseProxy.Routes["google-start"].Metadata).toBeUndefined();
+  expect(config.Bff.Clients[setup.name]).toEqual({ ForwardCookies: true });
+  const api = config.ReverseProxy.Routes[`${setup.name}-api`];
+  const callback = config.ReverseProxy.Routes[`${setup.name}-google-callback`];
+  expect(api.AuthorizationPolicy).toBeUndefined();
+  expect(callback.AuthorizationPolicy).toBe("anonymous");
+  expect(callback.Match).toEqual({
+    Hosts: ["localhost:8443"],
+    Path: "/calendar-api/connections/google/callback",
+    Methods: ["GET"],
+  });
+  expect(callback.ClusterId).toBe(api.ClusterId);
 });
 
-it("explains the isolated application cookie callback separately from BFF login", () => {
-  // Arrange
+it("navigates diagrams, refresh and logout races", () => {
   render(<Documentation />);
-  // Act
+  fireEvent.click(screen.getByRole("link", { name: /Как работает/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Продление" }));
+  fireEvent.click(screen.getByRole("button", { name: /4.*BFF → Redis, CAS/ }));
+  expect(screen.getByText(/Logout удалил запись/)).toBeVisible();
+  expect(screen.getByRole("img", { name: /GW \/ YARP → Redis/ })).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "Выход" }));
   fireEvent.click(
-    screen.getByRole("button", { name: /02 · Как работает SPA/ }),
+    screen.getByRole("button", { name: /2.*BFF → Redis GETDEL/ }),
   );
-  fireEvent.click(screen.getByRole("button", { name: "Подключения" }));
-  fireEvent.click(
-    screen.getByRole("button", { name: /4.*Provider → anonymous callback/ }),
-  );
-  // Assert
-  expect(screen.getByText(/Сам backend проверяет state/)).toBeVisible();
+  expect(screen.getByText(/на момент удаления/)).toBeVisible();
+  const architecture = screen.getByRole("region", {
+    name: "Интерактивная схема архитектуры",
+  });
+  fireEvent.click(within(architecture).getByRole("button", { name: /Redis/ }));
+  fireEvent.click(screen.getByRole("checkbox", { name: "Без SPA" }));
+  expect(
+    within(architecture).queryByRole("button", { name: /Redis/ }),
+  ).toBeNull();
+  expect(architecture).toHaveTextContent("Профили SPA отсутствуют");
 });
+
+it("opens deep links and handles browser navigation", () => {
+  window.history.replaceState(null, "", "/docs#sessions");
+  render(<Documentation />);
+  expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+    "Сессии и cookies",
+  );
+  window.history.replaceState(null, "", "/docs#checks");
+  fireEvent(window, new HashChangeEvent("hashchange"));
+  expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+    "Проверка и ошибки",
+  );
+});
+
+it("updates the route inspector when CSRF and profile conditions change", () => {
+  render(<Documentation />);
+  fireEvent.click(screen.getByRole("link", { name: /Маршруты/ }));
+  expect(screen.getByRole("status")).toHaveTextContent("YARP → сервис");
+  fireEvent.click(screen.getByRole("checkbox", { name: "X-CSRF: 1" }));
+  expect(screen.getByRole("status")).toHaveTextContent("403");
+  fireEvent.click(
+    screen.getByRole("checkbox", { name: "Профиль SPA подключён" }),
+  );
+  expect(screen.getByRole("status")).toHaveTextContent("Native YARP");
+});
+
+it.each([
+  [{ session: false }, "401"],
+  [{ csrf: false }, "403"],
+  [{ foreign: true }, "403"],
+  [{ redis: false, csrf: false }, "503"],
+  [{ route: "native-api", session: false }, "YARP → сервис"],
+  [{ route: "native-api", bearer: false }, "401"],
+  [{ route: "native-api", scope: false }, "403"],
+  [{ profile: false, route: "auth" }, "404"],
+  [{ profile: false }, "Native YARP"],
+  [
+    {
+      route: "callback",
+      session: false,
+      csrf: false,
+      foreign: true,
+      redis: false,
+    },
+    "YARP → callback",
+  ],
+  [{ route: "spa", session: false, csrf: false, redis: false }, "YARP → SPA"],
+  [{ route: "auth" }, "Claims сессии"],
+] satisfies [Partial<RouteScenario>, string][])(
+  "models route boundary %j → %s",
+  (changes, result) => {
+    expect(inspectRoute({ ...scenario, ...changes }).result).toBe(result);
+  },
+);

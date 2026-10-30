@@ -28,8 +28,24 @@ public sealed class OidcProxyClientOptions
     public TimeSpan SessionAbsoluteTimeout { get; set; } = TimeSpan.FromHours(8);
 
     /// <summary>
+    /// Forwards backend cookies with names isolated by client and YARP cluster.
+    /// Backend paths are enforced during forwarding and expiry is retained.
+    /// Browser cookies use __Host-Http-, Path=/, Secure and HttpOnly without Domain.
+    /// No provider-specific names or paths are required.
+    /// </summary>
+    public bool ForwardCookies { get; set; }
+
+    /// <summary>
+    /// Selects routes by exact native YARP Hosts and its anonymous policy.
+    /// Configuration registration enables this when Routes is omitted.
+    /// Explicit bindings still take precedence.
+    /// </summary>
+    public bool AutoBindRoutes { get; set; }
+
+    /// <summary>
     /// BFF behavior keyed by native YARP RouteId. Each route belongs to
-    /// exactly one client; YARP configuration contains no BFF settings.
+    /// exactly one client. When omitted from configuration, AutoBindRoutes
+    /// selects routes by exact YARP Hosts and the native anonymous policy.
     /// </summary>
     public Dictionary<string, OidcProxyRouteOptions> Routes { get; set; } =
         new(StringComparer.Ordinal);

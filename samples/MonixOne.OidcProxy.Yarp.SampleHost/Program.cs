@@ -10,7 +10,7 @@ public partial class Program
         var builder = WebApplication.CreateBuilder(args);
 
         builder.Services.AddOidcProxy(builder.Configuration);
-        await using var app = builder.Build();
+        var app = builder.Build();
         app.UseOidcProxy();
         app.UseDefaultFiles();
         app.UseStaticFiles();

@@ -6,6 +6,12 @@ namespace MonixOne.OidcProxy.Yarp;
 public sealed class ProxyOptions
 {
     /// <summary>
+    /// The configuration value containing the shared Redis connection string.
+    /// Both ConnectionMultiplexer and IConnectionMultiplexer resolve to one connection.
+    /// </summary>
+    public string RedisConnectionStringKey { get; set; } = "ConnectionStrings:Redis";
+
+    /// <summary>
     /// The application segment isolating Redis and Data Protection keys.
     /// </summary>
     public string ApplicationName { get; set; } = string.Empty;

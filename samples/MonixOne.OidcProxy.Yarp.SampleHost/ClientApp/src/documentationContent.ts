@@ -7,15 +7,24 @@ export const initialSetup = {
   authority: "https://identity.example.com",
   clientId: "spa-bff",
   api: "http://resource-api:8000/",
-  application: "customer-portal",
-  environment: "Production",
-  namespace: "web",
+  apiPath: "/api",
+  application: "gateway-service",
+  environment: "Development",
+  namespace: "bff",
+  redisKey: "RateLimiting:RedisConnectionString",
   scopes: "openid profile offline_access api.read",
 };
 export type Setup = typeof initialSetup;
 export type ClientSetup = Pick<
   Setup,
-  "name" | "origin" | "pathBase" | "authority" | "clientId" | "api" | "scopes"
+  | "name"
+  | "origin"
+  | "pathBase"
+  | "authority"
+  | "clientId"
+  | "api"
+  | "apiPath"
+  | "scopes"
 >;
 
 export function validateSetup(setup: Setup): string[] {
@@ -72,6 +81,20 @@ export function validateSetup(setup: Setup): string[] {
       );
   }
   if (!setup.clientId.trim()) errors.push("Client ID обязателен.");
+  if (
+    !/^\/[a-zA-Z0-9/_-]+$/.test(setup.apiPath) ||
+    setup.apiPath.endsWith("/") ||
+    setup.apiPath.includes("//")
+  )
+    errors.push(
+      "API path: абсолютный префикс без trailing slash, query и wildcard.",
+    );
+  if (
+    !/^[A-Za-z_][A-Za-z0-9_]*(?::[A-Za-z_][A-Za-z0-9_]*)+$/.test(setup.redisKey)
+  )
+    errors.push(
+      "Redis key: путь конфигурации, например RateLimiting:RedisConnectionString.",
+    );
   const scopes = setup.scopes.trim().split(/\s+/);
   if (!scopes.includes("openid")) errors.push("Добавьте scope openid.");
   if (!scopes.includes("offline_access"))
@@ -107,6 +130,7 @@ export function validateClients(setup: Setup, others: ClientSetup[]): string[] {
 export function createConfiguration(
   setup: Setup,
   others: ClientSetup[] = [],
+  options: { native?: boolean; forwardCookies?: boolean } = {},
 ): string {
   const clients = [setup, ...others];
   return JSON.stringify(
@@ -118,6 +142,9 @@ export function createConfiguration(
         KnownProxies: ["10.0.0.10"],
         AllowedHosts: clients.map((client) => new URL(client.origin).hostname),
       },
+      Cors: {
+        Origins: clients.map((client) => new URL(client.origin).origin),
+      },
       Logging: {
         LogLevel: {
           "Microsoft.AspNetCore.Hosting.Diagnostics": "Warning",
@@ -126,27 +153,31 @@ export function createConfiguration(
         },
       },
       Bff: {
-        ApplicationName: setup.application,
-        KeyNamespace: setup.namespace,
-        EncryptionKey: "",
-        Clients: Object.fromEntries(
-          clients.map((client) => [
-            client.name,
-            {
-              PublicOrigin: new URL(client.origin).origin,
-              PathBase: new URL(
-                client.pathBase || "/",
-                client.origin,
-              ).pathname.replace(/\/+$/, ""),
-              Routes: { [`${client.name}-api`]: { AllowAnonymous: false } },
-              OpenIdConnect: {
-                Authority: client.authority,
-                ClientId: client.clientId,
-                Scope: client.scopes.trim().split(/\s+/),
+        RedisConnectionStringKey: setup.redisKey,
+        ...(!options.native && {
+          ApplicationName: setup.application,
+          KeyNamespace: setup.namespace,
+          Clients: Object.fromEntries(
+            clients.map((client) => [
+              client.name,
+              {
+                PublicOrigin: new URL(client.origin).origin,
+                PathBase: new URL(
+                  client.pathBase || "/",
+                  client.origin,
+                ).pathname.replace(/\/+$/, ""),
+                ...(options.forwardCookies && {
+                  ForwardCookies: true,
+                }),
+                OpenIdConnect: {
+                  Authority: client.authority,
+                  ClientId: client.clientId,
+                  Scope: client.scopes.trim().split(/\s+/),
+                },
               },
-            },
-          ]),
-        ),
+            ]),
+          ),
+        }),
       },
       ReverseProxy: {
         Routes: Object.fromEntries(
@@ -155,8 +186,10 @@ export function createConfiguration(
             {
               ClusterId: `${client.name}-resource-api`,
               Match: {
-                Hosts: [new URL(client.origin).host],
-                Path: "/api/{**all}",
+                ...(!options.native && {
+                  Hosts: [new URL(client.origin).host],
+                }),
+                Path: `${client.apiPath}/{**all}`,
               },
             },
           ]),
@@ -211,57 +244,26 @@ if (response.status === 401) {
 }
 
 export function createCookieConfiguration(setup: Setup): string {
-  const cluster = `${setup.name}-calendar`;
+  const cluster = `${setup.name}-resource-api`;
   return JSON.stringify(
     {
-      Bff: {
-        Clients: {
-          [setup.name]: {
-            Routes: {
-              "google-start": {
-                AllowAnonymous: false,
-                CookiePolicy: "calendar-google",
-              },
-              "google-callback": {
-                AllowAnonymous: true,
-                CookiePolicy: "calendar-google",
-              },
-            },
-            CookiePolicies: {
-              "calendar-google": {
-                ClusterId: cluster,
-                Names: ["calendar_google_state"],
-                Path: "/calendar-api/connections/google/callback",
-                SameSite: "Lax",
-                MaxAge: "00:10:00",
-              },
-            },
-          },
-        },
-      },
+      Bff: { Clients: { [setup.name]: { ForwardCookies: true } } },
       ReverseProxy: {
         Routes: {
-          "google-start": {
+          [`${setup.name}-api`]: {
             ClusterId: cluster,
             Match: {
               Hosts: [new URL(setup.origin).host],
-              Path: "/calendar-api/connections/google/start",
-              Methods: ["POST"],
+              Path: `${setup.apiPath}/{**all}`,
             },
           },
-          "google-callback": {
+          [`${setup.name}-google-callback`]: {
             ClusterId: cluster,
+            AuthorizationPolicy: "anonymous",
             Match: {
               Hosts: [new URL(setup.origin).host],
-              Path: "/calendar-api/connections/google/callback",
+              Path: `${setup.apiPath}/connections/google/callback`,
               Methods: ["GET"],
-            },
-          },
-        },
-        Clusters: {
-          [cluster]: {
-            Destinations: {
-              primary: { Address: "https://calendar-api.example.com/" },
             },
           },
         },
@@ -366,17 +368,17 @@ export const flows = {
   connections: {
     title: "Подключения",
     summary:
-      "CookiePolicy передаёт техническую cookie приложения через границу BFF.",
+      "ForwardCookies включает изолированный cookie bridge приложения; точный callback объявляется обычным YARP route.",
     steps: [
       [
         "SPA → protected start",
         "SPA вызывает start с BFF cookie и X-CSRF. Backend получает серверный Bearer и создаёт OAuth-транзакцию.",
-        "Политика относится только к выбранным routes и cluster.",
+        "Bearer передаётся только защищённым маршрутам подключённой SPA.",
       ],
       [
         "Backend → namespaced cookie",
-        "BFF пропускает разрешённую cookie с namespace клиента/политики, публичным Path и Secure/HttpOnly. Значение сохраняется.",
-        "Одинаковые backend names разных приложений изолированы.",
+        "BFF выдаёт __Host-Http-cookie с Path=/, без Domain, с Secure/HttpOnly. Исходный backend Path проверяется сервером, expiry сохраняется. Отдельная CookiePolicy не требуется.",
+        "Браузер запрещает Domain-cookie с этим префиксом: соседний поддомен не может подложить correlation cookie.",
       ],
       [
         "Browser → внешний provider",
@@ -390,7 +392,7 @@ export const flows = {
       ],
       [
         "Backend → clearCookie",
-        "Очистка проходит через тот же namespace/Path и удаляет browser cookie.",
+        "Очистка использует тот же namespace и backend scope, удаляя browser cookie с Path=/.",
         "Параллельные попытки одного подключения должен поддерживать backend.",
       ],
     ],

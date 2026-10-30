@@ -31,10 +31,8 @@ internal sealed class HostAuthenticationSchemeProvider(
         var context = accessor.HttpContext;
         var client = context is null ? null : clients.Find(context.Request);
         var endpoint = context?.GetEndpoint();
-        var routeId = endpoint?.Metadata.GetMetadata<RouteModel>()?.Config.RouteId;
-        var routeClient = routeId is null
-            ? null
-            : clients.ByRoute.GetValueOrDefault(routeId)?.Client.Name;
+        var route = endpoint?.Metadata.GetMetadata<RouteModel>()?.Config;
+        var routeClient = route is null ? null : clients.Find(route)?.Client.Name;
         // Native authorization policies without explicit schemes must return
         // the selected BFF cookie's 403, while other host endpoints keep theirs.
         return

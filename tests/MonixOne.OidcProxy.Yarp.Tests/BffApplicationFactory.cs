@@ -33,6 +33,7 @@ public sealed class BffApplicationFactory(
 ) : WebApplicationFactory<SpaHostProgram>
 {
     public static readonly Uri Origin = new("https://spa.example");
+    public Uri PublicOrigin { get; set; } = Origin;
     public ManualClock Clock { get; } = new();
     public string KeyNamespace { get; } = keyNamespace ?? Guid.NewGuid().ToString("N");
     public string? EncryptionKey { get; set; } = infrastructure.EncryptionKey;
@@ -97,7 +98,7 @@ public sealed class BffApplicationFactory(
                 "spa",
                 options =>
                 {
-                    options.PublicOrigin = Origin;
+                    options.PublicOrigin = PublicOrigin;
                     options.PathBase = PathBase;
                     ConfigureClientOptions?.Invoke(options);
                 }
@@ -132,7 +133,7 @@ public sealed class BffApplicationFactory(
                 {
                     RouteId = "api",
                     ClusterId = "api",
-                    Match = new() { Path = ProxyPath, Hosts = [Origin.Authority] },
+                    Match = new() { Path = ProxyPath, Hosts = [PublicOrigin.Authority] },
                 },
             };
             var clusters = new List<ClusterConfig>
@@ -230,7 +231,7 @@ public sealed class BffApplicationFactory(
         CreateClient(
             new WebApplicationFactoryClientOptions
             {
-                BaseAddress = Origin,
+                BaseAddress = PublicOrigin,
                 AllowAutoRedirect = false,
                 HandleCookies = handleCookies,
             }

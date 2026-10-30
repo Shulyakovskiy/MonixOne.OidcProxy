@@ -1,7 +1,8 @@
 # MonixOne.OidcProxy.Yarp
 
 A .NET 10 BFF for SPAs using ASP.NET Core OpenID Connect, YARP and Redis.
-OAuth tokens stay in encrypted server sessions; the browser receives a Secure, HttpOnly cookie.
+OAuth tokens remain in encrypted server sessions; the browser receives a Secure, HttpOnly cookie.
+Native YARP routes, JWT policies and load balancing remain active, including without SPA profiles.
 
 ```csharp
 builder.Services.AddOidcProxy(builder.Configuration);
@@ -9,21 +10,21 @@ builder.Services.AddOidcProxy(builder.Configuration);
 app.UseOidcProxy();
 ```
 
-The package configures YARP, Redis, trusted forwarded headers and all named OIDC clients.
-`Bff:Clients:<client>:Routes` owns BFF route bindings, `AllowAnonymous` and optional `CookiePolicy`.
-`ReverseProxy` retains native YARP hosts, paths, transforms and HTTP/HTTPS destinations.
-TLS may terminate at the load balancer with HTTP on the trusted internal network.
-Public origins, OIDC Authority and callback URLs remain HTTPS.
+Pass the root configuration. Use the `UseOidcProxy(pipeline => …)` callback for host
+observability, CORS and rate limiting. The package owns YARP registration, trusted
+forwarded headers and shared Redis registration. Exact native YARP hosts select SPA
+clients; `ForwardCookies` enables isolated backend cookies without provider-specific lists.
+The cookie bridge uses `__Host-Http-` cookies with `Path=/` and no Domain, preventing
+sibling-domain cookie tossing. Original backend paths are enforced during forwarding.
+Old `__Secure-` bridge cookies are ignored; restart pending OAuth connections after upgrading all replicas.
 
-Version 8.0.0 changes the configuration API: pass the root configuration instead of the Bff section,
-and move previous OidcProxy.Client / OidcProxy.CookiePolicy route metadata into Bff client Routes.
-The encrypted session format remains compatible with 7.0.0.
+Configure confidential clients, exact HTTPS callbacks and a trusted proxy boundary.
+Supply Redis, `Bff__EncryptionKey` and client secrets through a secret provider.
+Keep the Redis scope and encryption key consistent across replicas and restarts.
 
-Set `ConnectionStrings__Redis`, `Bff__EncryptionKey` and each confidential client secret through a secret provider.
-Keep the encryption key and Redis scope consistent across restarts and replicas.
-Configure the actual trusted load balancer IP/CIDR; internal HTTP carries credentials without encryption.
-
-[Setup and migration](https://github.com/Shulyakovskiy/MonixOne.OidcProxy.Yarp#readme) · [Sessions and Redis](https://github.com/Shulyakovskiy/MonixOne.OidcProxy.Yarp/blob/main/docs/SESSIONS.md) · [Sample](https://github.com/Shulyakovskiy/MonixOne.OidcProxy.Yarp/tree/main/samples/MonixOne.OidcProxy.Yarp.SampleHost)
+[Interactive setup guide](https://github.com/Shulyakovskiy/MonixOne.OidcProxy.Yarp#readme):
+configuration generator, middleware/flow diagrams, route simulator, sessions, migration and testing.
+Download `docs/index.html` from the repository to use the guide offline as a single file.
 
 Based on [OidcProxy.Net](https://github.com/oidcproxydotnet/OidcProxy.Net).
 Licensed under LGPL-3.0-only; upstream copyright retained.

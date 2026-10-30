@@ -18,49 +18,66 @@ public static class ApplicationBuilderExtensions
     /// Restores trusted forwarded headers before BFF processing.
     /// Call before static files and other routing.
     /// </summary>
-    public static WebApplication UseOidcProxy(this WebApplication app)
+    public static WebApplication UseOidcProxy(this WebApplication app) =>
+        app.UseOidcProxy(configureBeforeAuthentication: null);
+
+    /// <summary>
+    /// Builds one YARP pipeline and invokes host middleware after forwarded
+    /// headers, PathBase and routing, before authentication and BFF checks.
+    /// Without configured clients, native gateway routing remains active.
+    /// </summary>
+    public static WebApplication UseOidcProxy(
+        this WebApplication app,
+        Action<WebApplication>? configureBeforeAuthentication
+    )
     {
-        app.Services.GetRequiredService<ConnectionMultiplexer>();
+        ArgumentNullException.ThrowIfNull(app);
+        var clients = app.Services.GetService<BffClients>();
+        if (clients is not null)
+            app.Services.GetRequiredService<ConnectionMultiplexer>();
         app.UseForwardedHeaders();
-        var clients = app.Services.GetRequiredService<BffClients>();
-        app.Use(next =>
-        {
-            var mounts = clients
-                .ByName.Values.Where(c => c.Options.PathBase.Length > 0)
-                .ToDictionary(
-                    c => c.Name,
-                    c => new UsePathBaseMiddleware(
-                        next,
-                        PathString.FromUriComponent(c.Options.PathBase)
-                    )
-                );
-            return async context =>
+        if (clients is not null)
+            app.Use(next =>
             {
-                var client = clients.Find(context.Request);
-                if (client is not null && mounts.TryGetValue(client.Name, out var mount))
-                {
-                    if (
-                        !context.Request.Path.StartsWithSegments(
-                            PathString.FromUriComponent(client.Options.PathBase)
+                var mounts = clients
+                    .ByName.Values.Where(c => c.Options.PathBase.Length > 0)
+                    .ToDictionary(
+                        c => c.Name,
+                        c => new UsePathBaseMiddleware(
+                            next,
+                            PathString.FromUriComponent(c.Options.PathBase)
                         )
-                    )
+                    );
+                return async context =>
+                {
+                    var client = clients.Find(context.Request);
+                    if (client is not null && mounts.TryGetValue(client.Name, out var mount))
                     {
-                        context.Response.StatusCode = StatusCodes.Status404NotFound;
-                        return;
+                        if (
+                            !context.Request.Path.StartsWithSegments(
+                                PathString.FromUriComponent(client.Options.PathBase)
+                            )
+                        )
+                        {
+                            context.Response.StatusCode = StatusCodes.Status404NotFound;
+                            return;
+                        }
+                        await mount.Invoke(context);
                     }
-                    await mount.Invoke(context);
-                }
-                else if (client is null && context.Request.Path.StartsWithSegments("/.auth"))
-                    context.Response.StatusCode = StatusCodes.Status404NotFound;
-                else
-                    await next(context);
-            };
-        });
+                    else if (client is null && context.Request.Path.StartsWithSegments("/.auth"))
+                        context.Response.StatusCode = StatusCodes.Status404NotFound;
+                    else
+                        await next(context);
+                };
+            });
         app.UseRouting();
+        configureBeforeAuthentication?.Invoke(app);
         app.UseAuthentication();
-        app.UseMiddleware<BffRequestMiddleware>();
+        if (clients is not null)
+            app.UseMiddleware<BffRequestMiddleware>();
         app.UseAuthorization();
-        BffEndpoints.Map(app);
+        if (clients is not null)
+            BffEndpoints.Map(app);
         app.MapReverseProxy();
         return app;
     }

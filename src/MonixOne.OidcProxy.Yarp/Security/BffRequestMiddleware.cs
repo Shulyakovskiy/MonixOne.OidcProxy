@@ -39,7 +39,7 @@ internal sealed class BffRequestMiddleware(RequestDelegate next, ILoggerFactory 
         var endpoint = context.GetEndpoint();
         var client = endpoint?.Metadata.GetMetadata<BffClient>();
         var route = endpoint?.Metadata.GetMetadata<RouteModel>()?.Config;
-        var binding = route is null ? null : clients.ByRoute.GetValueOrDefault(route.RouteId);
+        var binding = route is null ? null : clients.Find(route);
         if (route is not null)
         {
             client = binding?.Client;

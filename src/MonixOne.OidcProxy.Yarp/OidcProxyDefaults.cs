@@ -6,6 +6,12 @@ namespace MonixOne.OidcProxy.Yarp;
 public static class OidcProxyDefaults
 {
     /// <summary>
+    /// The credentialed CORS policy configured from Cors:Origins by AddOidcProxy.
+    /// Apply it at the desired position in the host middleware callback.
+    /// </summary>
+    public const string CorsPolicy = "MonixOne.OidcProxy.Yarp.Cors";
+
+    /// <summary>
     /// Returns the named cookie authentication scheme for a client.
     /// </summary>
     public static string CookieScheme(string clientName) =>

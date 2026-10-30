@@ -2,7 +2,6 @@ export function createRoutes(pathBase: string) {
   const base = pathBase.replace(/\/+$/, "");
   return {
     docs: `${base}/docs`,
-    docsAssets: `${base}/docs-assets`,
     login: `${base}/.auth/login`,
     loginCallback: `${base}/.auth/login/callback`,
     logoutCallback: `${base}/.auth/signout-callback`,
