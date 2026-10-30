@@ -745,6 +745,15 @@ export default function Documentation() {
                   Forwarded headers включают XForwardedFor | XForwardedProto |
                   XForwardedHost. В GW этот блок не дублируется.
                 </p>
+                <p className="doc-hint">
+                  Для закрытого GW за контролируемым шлюзом можно включить
+                  ForwardedHeaders:TrustAllProxies=true. Пакет принимает один
+                  последний forwarded hop без списка IP или подсетей ingress.
+                  По умолчанию проверяются KnownProxies и KnownIPNetworks.
+                  Прямой недоверенный доступ к GW при ослабленной проверке нужно
+                  исключить: такой отправитель сможет подменить client IP.
+                  AllowedHosts, CORS, CSRF и аутентификация остаются включёнными.
+                </p>
               </section>
             </>
           )}

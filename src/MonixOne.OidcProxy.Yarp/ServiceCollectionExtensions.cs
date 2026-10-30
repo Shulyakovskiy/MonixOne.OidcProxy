@@ -97,10 +97,21 @@ public static class ServiceCollectionExtensions
                 | ForwardedHeaders.XForwardedProto
                 | ForwardedHeaders.XForwardedHost;
             var forwarded = configuration.GetSection("ForwardedHeaders");
-            foreach (var proxy in forwarded.GetSection("KnownProxies").Get<string[]>() ?? [])
-                options.KnownProxies.Add(IPAddress.Parse(proxy));
-            foreach (var network in forwarded.GetSection("KnownIPNetworks").Get<string[]>() ?? [])
-                options.KnownIPNetworks.Add(System.Net.IPNetwork.Parse(network));
+            if (forwarded.GetValue<bool>("TrustAllProxies"))
+            {
+                options.KnownProxies.Clear();
+                options.KnownIPNetworks.Clear();
+                options.ForwardLimit = 1;
+            }
+            else
+            {
+                foreach (var proxy in forwarded.GetSection("KnownProxies").Get<string[]>() ?? [])
+                    options.KnownProxies.Add(IPAddress.Parse(proxy));
+                foreach (
+                    var network in forwarded.GetSection("KnownIPNetworks").Get<string[]>() ?? []
+                )
+                    options.KnownIPNetworks.Add(System.Net.IPNetwork.Parse(network));
+            }
             foreach (var host in forwarded.GetSection("AllowedHosts").Get<string[]>() ?? [])
                 options.AllowedHosts.Add(host);
         });
