@@ -18,6 +18,15 @@ The cookie bridge uses `__Host-Http-` cookies with `Path=/` and no Domain, preve
 sibling-domain cookie tossing. Original backend paths are enforced during forwarding.
 Old `__Secure-` bridge cookies are ignored; restart pending OAuth connections after upgrading all replicas.
 
+For a private gateway behind a controlled edge proxy or routing mesh, opt in to
+`ForwardedHeaders:TrustAllProxies=true` to process one forwarded hop without
+listing changing proxy IPs or subnets. The package owns this policy and middleware;
+do not add another `UseForwardedHeaders` or host `PostConfigure` block.
+Strict `KnownProxies` / `KnownIPNetworks` checks remain the default when the flag
+is absent or false. The opt-in requires preventing direct untrusted access to the
+gateway: a direct sender can otherwise spoof the forwarded client IP.
+`AllowedHosts`, BFF origin checks, CORS, CSRF and authentication remain enforced.
+
 Configure confidential clients, exact HTTPS callbacks and a trusted proxy boundary.
 Supply Redis, `Bff__EncryptionKey` and client secrets through a secret provider.
 Keep the Redis scope and encryption key consistent across replicas and restarts.
