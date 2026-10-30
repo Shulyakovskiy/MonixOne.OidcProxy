@@ -3,3 +3,4 @@
 *.csx text eol=lf
 *.sln text eol=crlf
 *.png binary
+.githooks/* text eol=lf
