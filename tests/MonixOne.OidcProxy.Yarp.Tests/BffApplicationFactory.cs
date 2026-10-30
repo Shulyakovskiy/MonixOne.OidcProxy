@@ -295,10 +295,13 @@ internal static class BrowserRequests
         HttpClient identity,
         string pathBase = "",
         string? returnUrl = null,
-        Uri? origin = null
+        Uri? origin = null,
+        bool? rememberMe = null
     )
     {
         var path = pathBase + OidcProxyRoutes.Login;
+        if (rememberMe is { } remembered)
+            path = QueryHelpers.AddQueryString(path, "rememberMe", remembered ? "true" : "false");
         if (returnUrl is not null)
             path = QueryHelpers.AddQueryString(path, "returnUrl", returnUrl);
         var start = await browser.GetAsync(

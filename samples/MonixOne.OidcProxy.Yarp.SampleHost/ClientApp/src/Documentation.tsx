@@ -922,6 +922,15 @@ export default function Documentation() {
                   положительные; absolute не меньше idle и не больше 365 дней.
                   Refresh budget фиксирован.
                 </p>
+                <p>
+                  Для явного «Запомнить» передайте rememberMe=true в /.auth/login
+                  вместе с локальным returnUrl. Выбор защищён стандартным OIDC
+                  state. Постоянная cookie и серверная сессия имеют общий
+                  фиксированный срок RememberedSessionTimeout: по умолчанию
+                  30 дней без короткого idle-лимита. Активность и refresh не
+                  продлевают срок; logout, отзыв доступа и истечение refresh token
+                  могут завершить вход раньше. Без выбора остаётся сессионная cookie.
+                </p>
               </details>
               <details open>
                 <summary>Что хранится и чем шифруется</summary>

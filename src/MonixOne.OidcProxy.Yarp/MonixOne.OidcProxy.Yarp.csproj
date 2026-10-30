@@ -5,7 +5,7 @@
     <RootNamespace>MonixOne.OidcProxy.Yarp</RootNamespace>
     <PackageTags>aspnetcore;bff;spa;yarp;oauth2;openid-connect;openiddict;redis</PackageTags>
     <PackageIcon>nuget-icon.png</PackageIcon>
-    <Version>8.1.4</Version>
+    <Version>8.2.0</Version>
     <Authors>Albert Starreveld; Shulyakovsky.E</Authors>
     <Company>MonixOne</Company>
     <Copyright>MonixOne contributors; upstream copyright retained</Copyright>
@@ -20,7 +20,7 @@
     <PackageProjectUrl>https://github.com/Shulyakovskiy/MonixOne.OidcProxy.Yarp</PackageProjectUrl>
     <PackageLicenseExpression>LGPL-3.0-only</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageReleaseNotes>Documents private-ingress forwarding with an environment configuration example, package-owned middleware, one-hop client IP normalization before rate limiting, edge proxy responsibilities and the separate Identity pipeline. NuGet README and the offline interactive guide explain TrustAllProxies, strict defaults and preserved host, origin, CORS, CSRF and authentication checks. Runtime behavior is unchanged from 8.1.3.</PackageReleaseNotes>
+    <PackageReleaseNotes>Adds opt-in remembered browser sessions through rememberMe=true on the login endpoint. The framework-protected OIDC state carries the choice; the persistent cookie and encrypted Redis session share a fixed 30-day lifetime by default. Ordinary session cookies and existing idle and absolute limits remain the default.</PackageReleaseNotes>
   </PropertyGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />

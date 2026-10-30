@@ -288,6 +288,12 @@ internal static class OidcAuthentication
                 .GetRequiredService<ILoggerFactory>()
                 .CreateLogger("MonixOne.OidcProxy.Yarp.Session");
             var properties = context.Properties!;
+            var remembered = properties.IsPersistent;
+            var expiresAt =
+                now
+                + (remembered ? options.RememberedSessionTimeout : options.SessionAbsoluteTimeout);
+            properties.IssuedUtc = now;
+            properties.ExpiresUtc = expiresAt;
             properties.Items.TryGetValue(BffConstants.PreviousSession, out var previousId);
             properties.Items.Remove(BffConstants.PreviousSession);
             var fullTicket = new AuthenticationTicket(
@@ -319,8 +325,8 @@ internal static class OidcAuthentication
                 );
                 properties.Items.Clear();
                 properties.IssuedUtc = now;
-                properties.ExpiresUtc = now + options.SessionAbsoluteTimeout;
-                properties.IsPersistent = false;
+                properties.ExpiresUtc = expiresAt;
+                properties.IsPersistent = remembered;
             }
             catch (Exception failure)
             {

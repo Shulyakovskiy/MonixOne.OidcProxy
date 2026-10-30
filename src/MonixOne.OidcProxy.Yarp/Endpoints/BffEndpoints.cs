@@ -32,7 +32,17 @@ internal static class BffEndpoints
                     var returnUrl = GetReturnUrl(context, options);
                     if (returnUrl is null)
                         return Results.BadRequest();
-                    var properties = new AuthenticationProperties { RedirectUri = returnUrl };
+                    var remembered = context.Request.Query["rememberMe"];
+                    if (
+                        remembered.Count > 1
+                        || remembered.Count == 1 && !bool.TryParse(remembered[0], out _)
+                    )
+                        return Results.BadRequest();
+                    var properties = new AuthenticationProperties
+                    {
+                        RedirectUri = returnUrl,
+                        IsPersistent = remembered.Count == 1 && bool.Parse(remembered[0]!),
+                    };
                     var previous = await context.AuthenticateAsync(client.CookieScheme);
                     if (context.Items.ContainsKey(typeof(SessionUnavailableException)))
                         return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);

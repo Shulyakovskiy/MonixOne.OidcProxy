@@ -4,6 +4,14 @@ A .NET 10 BFF for SPAs using ASP.NET Core OpenID Connect, YARP and Redis.
 OAuth tokens remain in encrypted server sessions; the browser receives a Secure, HttpOnly cookie.
 Native YARP routes, JWT policies and load balancing remain active, including without SPA profiles.
 
+Login uses a session cookie and the existing idle/absolute limits by default.
+To remember a browser, explicitly pass `rememberMe=true` to `/.auth/login` with
+the local `returnUrl`. Framework-protected OIDC state carries the choice through
+the callback. The persistent cookie and encrypted Redis session share a fixed
+30-day lifetime without a shorter inactivity timeout. Refresh and activity never
+extend that deadline. Configure `Bff:Clients:<client>:RememberedSessionTimeout`
+to change it; logout, revocation and refresh-token expiry can end a session earlier.
+
 ```csharp
 builder.Services.AddOidcProxy(builder.Configuration);
 // After builder.Build():

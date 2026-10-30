@@ -313,6 +313,12 @@ public static class ServiceCollectionExtensions
                     && o.SessionAbsoluteTimeout <= TimeSpan.FromDays(365),
                 "SessionAbsoluteTimeout must be between SessionIdleTimeout and 365 days; both must be positive."
             )
+            .Validate(
+                o =>
+                    o.RememberedSessionTimeout > TimeSpan.Zero
+                    && o.RememberedSessionTimeout <= TimeSpan.FromDays(365),
+                "RememberedSessionTimeout must be positive and at most 365 days."
+            )
             .ValidateOnStart();
         services.AddKeyedSingleton<SessionStore>(
             name,
