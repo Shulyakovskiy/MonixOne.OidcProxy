@@ -1,6 +1,7 @@
 using System.Collections.Frozen;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
+using Yarp.ReverseProxy.Configuration;
 
 namespace MonixOne.OidcProxy.Yarp;
 
@@ -10,7 +11,6 @@ internal sealed record BffClient(string Name, OidcProxyClientOptions Options, st
 {
     internal string CookieScheme => OidcProxyDefaults.CookieScheme(Name);
     internal string OpenIdConnectScheme => OidcProxyDefaults.OpenIdConnectScheme(Name);
-    internal string CookieName => OidcProxyDefaults.CookieName(Name);
 }
 
 internal sealed record BffRoute(BffClient Client, OidcProxyRouteOptions Options);
@@ -74,6 +74,37 @@ internal sealed class BffClients
         && _byHost.TryGetValue(Key(request.Host.Host, request.Host.Port ?? 443), out var client)
             ? client
             : null;
+
+    internal BffRoute? Find(RouteConfig route)
+    {
+        if (ByRoute.TryGetValue(route.RouteId, out var binding))
+            return binding;
+        if (route.Match.Hosts is not { Count: > 0 } hosts)
+            return null;
+        var client = ByName.Values.FirstOrDefault(candidate =>
+            candidate.Options.AutoBindRoutes
+            && hosts.All(host =>
+                string.Equals(
+                    host,
+                    candidate.Options.PublicOrigin!.Authority,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
+        );
+        return client is null
+            ? null
+            : new BffRoute(
+                client,
+                new OidcProxyRouteOptions
+                {
+                    AllowAnonymous = string.Equals(
+                        route.AuthorizationPolicy,
+                        "anonymous",
+                        StringComparison.OrdinalIgnoreCase
+                    ),
+                }
+            );
+    }
 
     private static string Key(string host, int port) => host + ":" + port;
 }

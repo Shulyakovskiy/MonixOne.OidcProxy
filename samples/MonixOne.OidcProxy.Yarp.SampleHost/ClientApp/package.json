@@ -8,10 +8,11 @@
     "pnpm": "12.16.1"
   },
   "scripts": {
-    "dev": "node scripts/copy-doc-assets.mjs && vite",
-    "build": "node scripts/copy-doc-assets.mjs && tsc --noEmit && vite build",
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
     "test": "vitest run --config vitest.config.ts",
-    "docs:dev": "node scripts/copy-doc-assets.mjs && vite --mode docs --open /docs"
+    "docs:dev": "vite --mode docs --open /docs",
+    "docs:build": "tsc --noEmit && vite build --mode docs"
   },
   "dependencies": {
     "react": "19.3.1",

@@ -29,7 +29,7 @@ public sealed class PreparedConfigurationTests(InfrastructureFixture infrastruct
         using var browser = host.CreateClient(
             new WebApplicationFactoryClientOptions
             {
-                BaseAddress = new Uri("https://admin-dev.intra-beetroute.ru"),
+                BaseAddress = new Uri("https://admin.id-dev.intra-beetroute.ru"),
                 AllowAutoRedirect = false,
             }
         );
@@ -56,7 +56,7 @@ public sealed class PreparedConfigurationTests(InfrastructureFixture infrastruct
         query["client_id"].ToString().ShouldBe("br-admin-identity-bff");
         query["redirect_uri"]
             .ToString()
-            .ShouldBe("https://admin-dev.intra-beetroute.ru/admin/.auth/login/callback");
+            .ShouldBe("https://admin.id-dev.intra-beetroute.ru/admin/.auth/login/callback");
         login.StatusCode.ShouldBe(HttpStatusCode.Redirect);
         api.StatusCode.ShouldBe(HttpStatusCode.OK);
         (
@@ -97,7 +97,7 @@ public sealed class PreparedConfigurationTests(InfrastructureFixture infrastruct
         using var browser = host.CreateClient(
             new WebApplicationFactoryClientOptions
             {
-                BaseAddress = new Uri("https://admin-dev.intra-beetroute.ru"),
+                BaseAddress = new Uri("https://admin.id-dev.intra-beetroute.ru"),
                 AllowAutoRedirect = false,
                 HandleCookies = true,
             }

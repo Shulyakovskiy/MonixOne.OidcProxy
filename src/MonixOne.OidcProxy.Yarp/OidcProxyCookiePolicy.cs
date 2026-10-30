@@ -21,7 +21,9 @@ public sealed class OidcProxyCookiePolicy
     public string[] Names { get; set; } = [];
 
     /// <summary>
-    /// Cookie path relative to the client's PathBase, for example /calendar-api/connections/google/callback.
+    /// Server-side forwarding path relative to the client's PathBase, for example
+    /// /calendar-api/connections/google/callback. Browser cookies use Path=/
+    /// to meet the __Host- prefix requirements.
     /// </summary>
     public string Path { get; set; } = string.Empty;
 

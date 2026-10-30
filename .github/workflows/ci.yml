@@ -54,15 +54,21 @@ jobs:
         run: pnpm test
       - name: Build SPA and documentation
         working-directory: samples/MonixOne.OidcProxy.Yarp.SampleHost/ClientApp
-        run: pnpm build
+        run: |
+          pnpm build
+          pnpm docs:build
+      - name: Verify generated offline documentation
+        run: git diff --exit-code -- docs/index.html
       - name: Restore
         run: dotnet restore MonixOne.OidcProxy.Yarp.sln --disable-parallel
       - name: Build
         run: dotnet build MonixOne.OidcProxy.Yarp.sln -c Release --no-restore --disable-build-servers -m:1 -p:GeneratePackageOnBuild=false
+      - name: Install Chromium for cookie boundary tests
+        run: pwsh tests/MonixOne.OidcProxy.Yarp.Tests/bin/Release/net10.0/playwright.ps1 install --with-deps --only-shell chromium
       - name: Verify unused usings
         run: dotnet format style MonixOne.OidcProxy.Yarp.sln --no-restore --diagnostics IDE0005 --verify-no-changes
       - name: OIDC, YARP, OpenIddict/PostgreSQL and real Redis tests
-        run: dotnet test --project tests/MonixOne.OidcProxy.Yarp.Tests/MonixOne.OidcProxy.Yarp.Tests.csproj -c Release --no-build --no-restore -- --minimum-expected-tests 159 --no-ansi --progress off
+        run: dotnet test --project tests/MonixOne.OidcProxy.Yarp.Tests/MonixOne.OidcProxy.Yarp.Tests.csproj -c Release --no-build --no-restore -- --minimum-expected-tests 205 --no-ansi --progress off
       - name: Repeat refresh, multi-host, Redis mutation and lifetime tests
         run: dotnet test --project tests/MonixOne.OidcProxy.Yarp.Tests/MonixOne.OidcProxy.Yarp.Tests.csproj -c Release --no-build --no-restore -- --filter-class 'MonixOne.OidcProxy.Yarp.Tests.Refresh*' --filter-class MonixOne.OidcProxy.Yarp.Tests.MultiHostTests --filter-class MonixOne.OidcProxy.Yarp.Tests.RedisMutationTests --filter-class MonixOne.OidcProxy.Yarp.Tests.SessionLifetimeTests --minimum-expected-tests 62 --no-ansi --progress off
       - name: Pack the YARP package

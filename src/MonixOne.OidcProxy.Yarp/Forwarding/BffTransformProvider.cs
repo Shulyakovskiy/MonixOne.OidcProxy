@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Routing.Patterns;
 using Microsoft.Extensions.Logging;
 using Yarp.ReverseProxy.Configuration;
 using Yarp.ReverseProxy.Transforms;
@@ -21,7 +22,7 @@ internal sealed class BffTransformProvider(
 {
     public void ValidateRoute(TransformRouteValidationContext context)
     {
-        if (!clients.ByRoute.TryGetValue(context.Route.RouteId, out var binding))
+        if (clients.Find(context.Route) is not { } binding)
             return;
         var client = binding.Client;
         if (
@@ -67,7 +68,7 @@ internal sealed class BffTransformProvider(
         CancellationToken cancellationToken
     )
     {
-        if (!clients.ByRoute.TryGetValue(route.RouteId, out var binding))
+        if (clients.Find(route) is not { } binding)
             return ValueTask.FromResult(route);
         if (cluster is null)
             throw new ArgumentException("A BFF route requires a configured cluster.");
@@ -96,19 +97,32 @@ internal sealed class BffTransformProvider(
 
     public void Apply(TransformBuilderContext context)
     {
-        if (!clients.ByRoute.TryGetValue(context.Route.RouteId, out var binding))
+        if (clients.Find(context.Route) is not { } binding)
             return;
         var client = binding.Client;
         var policyName = binding.Options.CookiePolicy;
         var policy = policyName is null ? null : client.Options.CookiePolicies[policyName];
+        // Only an explicitly public, exact callback with constrained methods may
+        // receive application cookies from a foreign browser origin.
+        var allowForeignOriginCookies =
+            binding.Options.AllowAnonymous
+            && context.Route.Match.Methods is { Count: > 0 }
+            && context.Route.Match.Path is { } path
+            && RoutePatternFactory.Parse(path).Parameters.Count == 0;
         context.AddRequestTransform(request =>
         {
             request.ProxyRequest.Headers.Remove("Cookie");
             request.ProxyRequest.Headers.Authorization = null;
-            if (
-                policy is not null
-                && !ForwardedCookies.ApplyRequest(request, client, policyName!, policy)
-            )
+            var cookiesValid = policy is not null
+                ? ForwardedCookies.ApplyRequest(request, client, policyName!, policy)
+                : !client.Options.ForwardCookies
+                    || ForwardedCookies.ApplyApplicationRequest(
+                        request,
+                        client,
+                        context.Route.ClusterId!,
+                        allowForeignOriginCookies
+                    );
+            if (!cookiesValid)
             {
                 // YARP short-circuits forwarding when a request transform sets a status.
                 request.HttpContext.Response.StatusCode = StatusCodes.Status400BadRequest;
@@ -126,21 +140,27 @@ internal sealed class BffTransformProvider(
         context.AddResponseTransform(response =>
         {
             response.HttpContext.Response.Headers.Remove("Set-Cookie");
-            if (
-                policy is not null
-                && !ForwardedCookies.ApplyResponse(
+            var cookiesValid = policy is not null
+                ? ForwardedCookies.ApplyResponse(
                     response,
                     client,
                     policyName!,
                     policy,
                     clock.GetUtcNow()
                 )
-            )
+                : !client.Options.ForwardCookies
+                    || ForwardedCookies.ApplyApplicationResponse(
+                        response,
+                        client,
+                        context.Route.ClusterId!,
+                        clock.GetUtcNow()
+                    );
+            if (!cookiesValid)
             {
                 logger.LogWarning(
                     "Invalid downstream cookie headers for BFF client {Client}, policy {Policy}.",
                     client.Name,
-                    policyName
+                    policyName ?? "application"
                 );
                 response.HttpContext.Response.StatusCode = StatusCodes.Status502BadGateway;
                 response.HttpContext.Response.ContentLength = null;

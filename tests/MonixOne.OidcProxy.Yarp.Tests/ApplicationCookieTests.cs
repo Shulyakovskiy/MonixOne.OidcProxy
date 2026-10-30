@@ -63,7 +63,8 @@ public sealed class ApplicationCookieTests(InfrastructureFixture infrastructure)
         cookie.Name.ToString().ShouldNotBe(StateCookie);
         cookie.Value.ToString().ShouldBe("opaque-state");
         cookie.Domain.HasValue.ShouldBeFalse();
-        cookie.Path.ToString().ShouldBe("/admin" + Callback);
+        cookie.Name.ToString().ShouldStartWith("__Host-Http-");
+        cookie.Path.ToString().ShouldBe("/");
         cookie.Secure.ShouldBeTrue();
         cookie.HttpOnly.ShouldBeTrue();
         cookie.SameSite.ShouldBe(Microsoft.Net.Http.Headers.SameSiteMode.Lax);

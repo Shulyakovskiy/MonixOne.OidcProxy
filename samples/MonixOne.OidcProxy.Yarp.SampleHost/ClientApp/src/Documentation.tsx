@@ -1,25 +1,59 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   createConfiguration,
   createCookieConfiguration,
+  createSpaCode,
   flows,
   hostCode,
   initialSetup,
-  createSpaCode,
   validateClients,
-  type Setup,
+  validateSetup,
   type ClientSetup,
+  type Setup,
 } from "./documentationContent";
-import { createRoutes, routes } from "./routes";
+import {
+  gatewayHostCode,
+  inspectRoute,
+  pipeline,
+  presets,
+  type RouteScenario,
+} from "./documentationModel";
+import { Architecture, Sequence } from "./DocumentationDiagram";
+import { createRoutes } from "./routes";
 import "./documentation.css";
 
+const sections = [
+  ["setup", "Подключение", "Конфигурация и код"],
+  ["flow", "Как работает", "Схемы и порядок middleware"],
+  ["routes", "Маршруты", "BFF и native API"],
+  ["sessions", "Сессии и cookies", "Redis, реплики, refresh"],
+  ["checks", "Проверка и ошибки", "Локально и в CI"],
+] as const;
+type Section = (typeof sections)[number][0];
+const selectedSection = (): Section =>
+  sections.find(([id]) => `#${id}` === window.location.hash)?.[0] ?? "setup";
+const fieldLabels: Record<keyof Setup, string> = {
+  name: "Имя SPA",
+  origin: "SPA / BFF origin",
+  pathBase: "PathBase",
+  authority: "OIDC Authority",
+  clientId: "Client ID",
+  api: "Backend URL",
+  apiPath: "API path",
+  application: "ApplicationName",
+  environment: "Окружение",
+  namespace: "KeyNamespace",
+  redisKey: "Ключ подключения Redis",
+  scopes: "Scopes",
+};
+
 function Code({ label, value }: { label: string; value: string }) {
-  const [copiedValue, setCopiedValue] = useState<string | null>(null);
+  const [copied, setCopied] = useState<string | null>(null);
   const [error, setError] = useState(false);
   async function copy() {
     try {
       await navigator.clipboard.writeText(value);
-      setCopiedValue(value);
+      setCopied(value);
       setError(false);
     } catch {
       setError(true);
@@ -27,10 +61,10 @@ function Code({ label, value }: { label: string; value: string }) {
   }
   return (
     <section className="doc-code" aria-label={label}>
-      <div>
+      <div className="code-heading">
         <strong>{label}</strong>
-        <button type="button" onClick={copy}>
-          {copiedValue === value ? "Скопировано" : "Копировать"}
+        <button type="button" onClick={() => void copy()}>
+          {copied === value ? "Скопировано" : "Копировать"}
         </button>
       </div>
       <pre>
@@ -38,211 +72,376 @@ function Code({ label, value }: { label: string; value: string }) {
       </pre>
       {error && (
         <p role="status">
-          Буфер обмена недоступен. Выделите код и скопируйте вручную.
+          Буфер недоступен. Выделите и скопируйте код вручную.
         </p>
       )}
     </section>
   );
 }
 
-const steps = [
-  "Топология",
-  "OpenID Provider",
-  "Redis и ключи",
-  "Хост и YARP",
-  "React SPA",
-  "Проверка",
-];
-const fields: [keyof Setup, string][] = [
-  ["name", "Client name"],
-  ["origin", "SPA / BFF origin"],
-  ["pathBase", "PathBase (пусто для корня)"],
-  ["authority", "OIDC Authority"],
-  ["clientId", "Client ID"],
-  ["api", "Resource API"],
-  ["application", "Application name"],
-  ["environment", "Environment"],
-  ["namespace", "Redis namespace"],
-  ["scopes", "Scopes"],
-];
+function RouteInspector() {
+  const [scenario, setScenario] = useState<RouteScenario>({
+    profile: true,
+    route: "bff-api",
+    session: true,
+    csrf: true,
+    foreign: false,
+    bearer: true,
+    scope: true,
+    redis: true,
+  });
+  const result = inspectRoute(scenario);
+  const controls: [keyof Omit<RouteScenario, "route">, string][] = [
+    ["profile", "Профиль SPA подключён"],
+    ["session", "Действующая BFF-сессия"],
+    ["csrf", "X-CSRF: 1"],
+    ["foreign", "Чужой Origin"],
+    ["bearer", "Валидный native Bearer"],
+    ["scope", "Нужный native scope"],
+    ["redis", "Redis доступен"],
+  ];
+  return (
+    <div className="route-inspector">
+      <div>
+        <label className="doc-field">
+          Тип запроса
+          <select
+            value={scenario.route}
+            onChange={(event) =>
+              setScenario({
+                ...scenario,
+                route: event.target.value as RouteScenario["route"],
+              })
+            }
+          >
+            <option value="bff-api">Защищённый BFF API</option>
+            <option value="native-api">Защищённый native API на host GW</option>
+            <option value="spa">Anonymous SPA / assets</option>
+            <option value="callback">Точный GET anonymous callback</option>
+            <option value="auth">Защищённый /.auth/me</option>
+          </select>
+        </label>
+        <div className="doc-checks">
+          {controls.map(([key, label]) => (
+            <label key={key}>
+              <input
+                type="checkbox"
+                checked={scenario[key]}
+                onChange={(event) =>
+                  setScenario({
+                    ...scenario,
+                    [key]: event.target.checked,
+                  })
+                }
+              />
+              {label}
+            </label>
+          ))}
+        </div>
+      </div>
+      <div className="route-result" role="status" aria-live="polite">
+        <small>Решение GW</small>
+        <strong>{result.result}</strong>
+        <p>{result.detail}</p>
+        <span>
+          Модель документированного маршрута. Сеть, TLS и ответы ваших сервисов
+          не проверяются.
+        </span>
+      </div>
+    </div>
+  );
+}
 
 export default function Documentation() {
-  const [section, setSection] = useState<"setup" | "flows">("setup");
-  const [step, setStep] = useState(0);
-  const [setup, setSetup] = useState(initialSetup);
+  const [section, setSection] = useState<Section>(selectedSection);
+  const [setup, setSetup] = useState<Setup>(initialSetup);
   const [others, setOthers] = useState<ClientSetup[]>([]);
+  const [native, setNative] = useState(false);
+  const [cookies, setCookies] = useState(false);
+  const [code, setCode] = useState<"config" | "host" | "secrets" | "spa">(
+    "config",
+  );
   const [flow, setFlow] = useState<keyof typeof flows>("login");
   const [flowStep, setFlowStep] = useState(0);
-  const errors = validateClients(setup, others);
+  const [middleware, setMiddleware] = useState(0);
+  useEffect(() => {
+    const previousTitle = document.title;
+    document.title = "MonixOne.OidcProxy.Yarp — справочник";
+    const onHash = () => setSection(selectedSection());
+    window.addEventListener("hashchange", onHash);
+    return () => {
+      window.removeEventListener("hashchange", onHash);
+      document.title = previousTitle;
+    };
+  }, []);
+  const errors = native
+    ? validateSetup({
+        ...initialSetup,
+        name: setup.name,
+        environment: setup.environment,
+        origin: setup.origin,
+        api: setup.api,
+        apiPath: setup.apiPath,
+        redisKey: setup.redisKey,
+      })
+    : validateClients(setup, others);
   const valid = errors.length === 0;
-  const targetRoutes = createRoutes(setup.pathBase);
-  const current = flows[flow];
-  const detail = current.steps[flowStep]!;
-  const callback = valid
-    ? new URL(targetRoutes.loginCallback, setup.origin).href
-    : "Исправьте URL на шаге 1";
-  const logoutCallback = valid
-    ? new URL(targetRoutes.logoutCallback, setup.origin).href
-    : "Исправьте URL на шаге 1";
+  const clients = native ? [] : [setup, ...others];
+  const paths = createRoutes(setup.pathBase);
+  const currentFlow = flows[flow];
+  const detail = currentFlow.steps[flowStep]!;
+  const secrets = [
+    `ASPNETCORE_ENVIRONMENT=${setup.environment}`,
+    `${setup.redisKey.replaceAll(":", "__")}=<Redis connection>`,
+    ...(!native
+      ? [
+          "Bff__EncryptionKey=<постоянный случайный секрет>",
+          ...clients.map(
+            (client) =>
+              `Bff__Clients__${client.name}__OpenIdConnect__ClientSecret=<секрет confidential client>`,
+          ),
+        ]
+      : []),
+  ].join("\n");
+  const fields = (keys: (keyof Setup)[]) =>
+    keys.map((key) => (
+      <label className="doc-field" key={key}>
+        {fieldLabels[key]}
+        <input
+          value={setup[key]}
+          spellCheck={false}
+          autoComplete="off"
+          onChange={(event) =>
+            setSetup({ ...setup, [key]: event.target.value })
+          }
+        />
+      </label>
+    ));
 
   return (
     <div className="docs">
       <header className="doc-header">
-        <a href={routes.docs} className="doc-brand">
-          <img
-            src={`${routes.docsAssets}/nuget-icon.png`}
-            alt=""
-            width="40"
-            height="40"
-          />
-          MonixOne.OidcProxy.Yarp
+        <a
+          className="doc-brand"
+          href="#setup"
+          onClick={() => setSection("setup")}
+        >
+          <span className="brand-symbol" aria-hidden="true">
+            M
+          </span>
+          <span>
+            MonixOne
+            <span className="brand-package">OidcProxy.Yarp</span>
+          </span>
         </a>
-        <a href="https://github.com/Shulyakovskiy/MonixOne.OidcProxy.Yarp">
-          Исходный код ↗
-        </a>
-      </header>
-      <main>
-        <div className="doc-hero">
-          <p className="doc-kicker">.NET 10 · YARP · OPENID CONNECT · REDIS</p>
-          <h1>
-            SPA с серверной
-            <br />
-            <span>OAuth-сессией.</span>
-          </h1>
-          <p>
-            Настройте BFF и разберите путь каждого запроса. В браузере — UI и
-            HttpOnly cookie. Токены, refresh и confidential credentials остаются
-            на сервере.
-          </p>
+        <div className="doc-meta">
+          <span className="version-label">
+            v{import.meta.env.VITE_PACKAGE_VERSION ?? "8.x"}
+          </span>
+          <span>.NET 10</span>
+          <a href="https://github.com/Shulyakovskiy/MonixOne.OidcProxy.Yarp">
+            Исходный код ↗
+          </a>
         </div>
-        <nav className="doc-tabs" aria-label="Раздел документации">
-          <button
-            aria-pressed={section === "setup"}
-            onClick={() => setSection("setup")}
-          >
-            01 · Пошаговая настройка
-          </button>
-          <button
-            aria-pressed={section === "flows"}
-            onClick={() => setSection("flows")}
-          >
-            02 · Как работает SPA
-          </button>
-        </nav>
-        {section === "setup" ? (
-          <div className="doc-layout">
-            <nav className="doc-steps" aria-label="Шаги настройки">
-              {steps.map((title, index) => (
-                <button
-                  key={title}
-                  aria-current={step === index ? "step" : undefined}
-                  onClick={() => setStep(index)}
+      </header>
+      <div className="doc-shell">
+        <aside className="doc-sidebar">
+          <p className="eyebrow">СПРАВОЧНИК</p>
+          <nav aria-label="Разделы документации">
+            {sections.map(([id, title, subtitle], index) => (
+              <a
+                href={`#${id}`}
+                key={id}
+                aria-current={section === id ? "page" : undefined}
+                onClick={() => setSection(id)}
+              >
+                <span className="nav-number">0{index + 1}</span>
+                <span>
+                  <strong>{title}</strong>
+                  <small>{subtitle}</small>
+                </span>
+              </a>
+            ))}
+          </nav>
+          <p className="sidebar-note">
+            Без сервисов и секретов.
+            <br />
+            Всё вычисляется в этой вкладке.
+          </p>
+        </aside>
+        <main className="doc-main" id={section}>
+          <div className="doc-section-heading">
+            <p className="eyebrow">OIDC · YARP · REDIS</p>
+            <h1>{sections.find(([id]) => id === section)?.[1]}</h1>
+            <p>
+              {section === "setup"
+                ? "Минимальные изменения в GW. Конфигурация, callbacks и код — в одном месте."
+                : section === "flow"
+                  ? "Выберите компонент или этап. Схема показывает, где проходят запросы, cookies и токены."
+                  : section === "routes"
+                    ? "Одна регистрация YARP, разные границы доступа. Native API сохраняют свои JWT и политики."
+                    : section === "sessions"
+                      ? "Что хранится на сервере, как работают реплики и что происходит при отказе."
+                      : "Самодостаточные тесты и проверка своего окружения без ложного подтверждения готовности."}
+            </p>
+          </div>
+
+          {section === "setup" && (
+            <>
+              <div className="doc-toolbar">
+                <div className="segmented" aria-label="Шаблоны">
+                  {Object.entries(presets).map(([key, preset]) => (
+                    <button
+                      type="button"
+                      key={key}
+                      onClick={() => {
+                        setSetup({
+                          ...preset.setup,
+                        });
+                        setOthers([]);
+                        setNative(false);
+                        setCookies(key !== "generic");
+                      }}
+                    >
+                      {preset.title}
+                    </button>
+                  ))}
+                </div>
+                <label className="doc-toggle">
+                  <input
+                    type="checkbox"
+                    checked={native}
+                    onChange={(event) => setNative(event.target.checked)}
+                  />
+                  Без SPA / native GW
+                </label>
+              </div>
+              <div className="setup-layout">
+                <section
+                  className="setup-fields"
+                  aria-label="Параметры конфигурации"
                 >
-                  <span>{String(index + 1).padStart(2, "0")}</span>
-                  {title}
-                </button>
-              ))}
-              <p>
-                Параметры обрабатываются только в этой вкладке, не сохраняются и
-                не отправляются на сервер. Секреты сюда вводить не нужно.
-              </p>
-            </nav>
-            <article className="doc-panel">
-              <p className="doc-kicker">
-                ШАГ {step + 1} ИЗ {steps.length}
-              </p>
-              <h2>{steps[step]}</h2>
-              {step === 0 && (
-                <>
-                  <p>
-                    Браузер обращается по HTTPS к балансировщику, далее YARP/BFF
-                    и приложения работают по HTTP. Каждая SPA использует свой
-                    публичный origin и OIDC client.
-                  </p>
-                  <p>
-                    Resource API и OpenID Provider — отдельные серверы. Пакет
-                    проксирует только маршруты из конфигурации YARP.
-                  </p>
+                  <h2>1. Публичные адреса</h2>
                   <div className="doc-field-grid">
-                    {fields.map(([key, label]) => (
-                      <label key={key}>
-                        {label}
-                        <input
-                          value={setup[key]}
-                          autoComplete="off"
-                          spellCheck={false}
-                          onChange={(e) =>
-                            setSetup({ ...setup, [key]: e.target.value })
-                          }
-                        />
-                      </label>
-                    ))}
+                    {fields(
+                      native
+                        ? ["origin", "api", "apiPath"]
+                        : [
+                            "origin",
+                            "pathBase",
+                            "authority",
+                            "clientId",
+                            "api",
+                            "apiPath",
+                          ],
+                    )}
                   </div>
-                  {others.map((client, index) => (
-                    <fieldset key={index}>
-                      <legend>SPA {index + 2}</legend>
-                      <div className="doc-field-grid">
-                        {fields
-                          .filter(
-                            ([key]) =>
-                              ![
-                                "application",
-                                "environment",
-                                "namespace",
-                              ].includes(key),
-                          )
-                          .map(([key, label]) => {
-                            const clientKey = key as keyof ClientSetup;
-                            return (
-                              <label key={key}>
-                                SPA {index + 2} · {label}
+                  <details>
+                    <summary>Имена, окружение и Redis</summary>
+                    <div className="doc-field-grid">
+                      {fields(
+                        native
+                          ? ["name", "environment", "redisKey"]
+                          : [
+                              "name",
+                              "application",
+                              "environment",
+                              "namespace",
+                              "redisKey",
+                              "scopes",
+                            ],
+                      )}
+                    </div>
+                  </details>
+                  {!native && (
+                    <>
+                      <label className="doc-toggle">
+                        <input
+                          type="checkbox"
+                          checked={cookies}
+                          onChange={(event) => setCookies(event.target.checked)}
+                        />
+                        ForwardCookies — доверять cookies backend этих SPA
+                      </label>
+                      {others.map((client, index) => (
+                        <details key={index} open>
+                          <summary>
+                            SPA {index + 2} · {client.name}
+                          </summary>
+                          <div className="doc-field-grid">
+                            {(
+                              [
+                                "name",
+                                "origin",
+                                "pathBase",
+                                "authority",
+                                "clientId",
+                                "api",
+                                "apiPath",
+                                "scopes",
+                              ] as const
+                            ).map((key) => (
+                              <label className="doc-field" key={key}>
+                                SPA {index + 2} · {fieldLabels[key]}
                                 <input
-                                  value={client[clientKey]}
-                                  autoComplete="off"
+                                  value={client[key]}
                                   spellCheck={false}
-                                  onChange={(e) =>
+                                  autoComplete="off"
+                                  onChange={(event) =>
                                     setOthers(
                                       others.map((value, at) =>
                                         at === index
-                                          ? { ...value, [key]: e.target.value }
+                                          ? {
+                                              ...value,
+                                              [key]: event.target.value,
+                                            }
                                           : value,
                                       ),
                                     )
                                   }
                                 />
                               </label>
-                            );
-                          })}
-                      </div>
+                            ))}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setOthers(others.filter((_, at) => at !== index))
+                            }
+                          >
+                            Удалить SPA {index + 2}
+                          </button>
+                        </details>
+                      ))}
                       <button
+                        className="subtle-button"
                         type="button"
-                        onClick={() =>
-                          setOthers(others.filter((_, at) => at !== index))
-                        }
+                        onClick={() => {
+                          let number = 2;
+                          while (
+                            [setup, ...others].some(
+                              (client) => client.name === `spa${number}`,
+                            )
+                          )
+                            number++;
+                          setOthers([
+                            ...others,
+                            {
+                              ...initialSetup,
+                              name: `spa${number}`,
+                              origin: `https://spa${number}.example.com`,
+                              clientId: `spa${number}-bff`,
+                            },
+                          ]);
+                        }}
                       >
-                        Удалить SPA {index + 2}
+                        + Добавить SPA
                       </button>
-                    </fieldset>
-                  ))}
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setOthers([
-                        ...others,
-                        {
-                          ...initialSetup,
-                          name: `spa${others.length + 2}`,
-                          origin: `https://spa${others.length + 2}.example.com`,
-                          clientId: `spa${others.length + 2}-bff`,
-                        },
-                      ])
-                    }
-                  >
-                    Добавить SPA
-                  </button>
+                    </>
+                  )}
                   {!valid && (
-                    <div role="alert" className="doc-note doc-error">
-                      <strong>Проверьте параметры</strong>
+                    <div role="alert" className="doc-notice error">
+                      <strong>Исправьте параметры</strong>
                       <ul>
                         {errors.map((error) => (
                           <li key={error}>{error}</li>
@@ -250,32 +449,123 @@ export default function Documentation() {
                       </ul>
                     </div>
                   )}
-                  <p className="doc-note">
-                    Это проверка формата, а не проверка подключения. DNS, TLS,
-                    доступность Redis, регистрация клиента и права на API
-                    проверяются при запуске и ручном проходе сценария.
+                  <p className="doc-hint">
+                    Сюда вводятся только публичные параметры. Пароли, токены и
+                    ключи не запрашиваются, не сохраняются и не отправляются.
                   </p>
-                </>
-              )}
-              {step === 1 && (
-                <>
+                </section>
+                <section
+                  className="setup-output"
+                  aria-label="Сгенерированная конфигурация"
+                >
+                  <h2>2. Подключение</h2>
+                  <div
+                    className="segmented code-tabs"
+                    aria-label="Результат генерации"
+                  >
+                    {(
+                      [
+                        ["config", "appsettings"],
+                        ["host", "GW / Program.cs"],
+                        ["secrets", "Секреты"],
+                        ["spa", "SPA-клиент"],
+                      ] as const
+                    ).map(([key, label]) => (
+                      <button
+                        type="button"
+                        key={key}
+                        aria-pressed={code === key}
+                        onClick={() => setCode(key)}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  {!valid ? (
+                    <p className="doc-notice">
+                      Конфигурация появится после исправления параметров.
+                    </p>
+                  ) : code === "config" ? (
+                    <>
+                      <Code
+                        label="appsettings.json — без секретов"
+                        value={createConfiguration(
+                          setup,
+                          native ? [] : others,
+                          {
+                            native,
+                            forwardCookies: cookies,
+                          },
+                        )}
+                      />
+                      <p className="doc-hint">
+                        Это фрагмент для слияния. Сохраните существующие routes,
+                        clusters, CORS origins, JWT/scope и rate-limit настройки
+                        GW. Замените 10.0.0.10 реальным IP ближайшего proxy.
+                      </p>
+                    </>
+                  ) : code === "host" ? (
+                    <>
+                      <Code
+                        label="Подключение в существующем GW"
+                        value={gatewayHostCode}
+                      />
+                      <details>
+                        <summary>
+                          Полный Program.cs для отдельного sample host
+                        </summary>
+                        <Code label="Program.cs standalone" value={hostCode} />
+                      </details>
+                      <p className="doc-hint">
+                        Native auth, rate limiting и observability
+                        регистрируются расширениями вашего GW. AddReverseProxy,
+                        MapReverseProxy и middleware пакета повторять не нужно.
+                      </p>
+                    </>
+                  ) : code === "secrets" ? (
+                    <>
+                      <Code
+                        label="Environment / secret provider"
+                        value={secrets}
+                      />
+                      <p className="doc-hint">
+                        EncryptionKey создаётся один раз:{" "}
+                        <code>openssl rand -base64 32</code>. На репликах должны
+                        совпадать Redis, namespace и ключ. Настройки BFF
+                        фиксируются при старте.
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <Code
+                        label="Login и чтение сессии"
+                        value={createSpaCode(setup.pathBase)}
+                      />
+                      <p className="doc-hint">
+                        Login — навигация. Logout — antiforgery и native POST
+                        form. Готовая реализация: <code>src/bff.ts</code> в
+                        sample.
+                      </p>
+                    </>
+                  )}
+                </section>
+              </div>
+              {!native && valid && (
+                <section className="doc-block">
+                  <div className="block-heading">
+                    <h2>3. Регистрация в Identity</h2>
+                    <span>Confidential · Code + PKCE S256</span>
+                  </div>
                   <p>
-                    Зарегистрируйте <strong>confidential web client</strong>.
-                    Разрешите Authorization Code, Refresh Token и PKCE S256. SPA
-                    не регистрируется как public OAuth client и не получает
-                    client secret.
+                    Разрешите
+                    authorization/token/refresh/revocation/end-session, response
+                    type <code>code</code> и нужные scopes. Каждый client_id
+                    регистрируется отдельно; API проверяет audience и права.
                   </p>
-                  <Code label="Redirect URI" value={callback} />
-                  <Code
-                    label="Post logout redirect URI"
-                    value={logoutCallback}
-                  />
-                  {valid &&
-                    others.map((client) => (
-                      <section key={client.name}>
-                        <h3>
-                          {client.name} · {client.origin}
-                        </h3>
+                  <div className="callback-grid">
+                    {clients.map((client) => (
+                      <div key={client.name}>
+                        <strong>{client.name}</strong>
                         <Code
                           label={`Redirect URI · ${client.name}`}
                           value={
@@ -294,159 +584,578 @@ export default function Documentation() {
                             ).href
                           }
                         />
-                      </section>
+                      </div>
                     ))}
-                  <p>
-                    Зарегистрируйте confidential client с Authorization Code +
-                    PKCE, refresh grant и нужными API scopes. Провайдер должен
-                    иметь browser login UI и продолжать исходный authorization
-                    request после входа.
-                  </p>
-                  <p>
-                    Authority и callback URI используют публичный HTTPS. Для
-                    OpenIddict нужны permissions используемых endpoints, grants,
-                    response type code и API scopes.
-                  </p>
-                  <a href="https://documentation.openiddict.com/guides/">
-                    Настройка OpenIddict ↗
-                  </a>
-                </>
-              )}
-              {step === 2 && (
-                <>
-                  <p>
-                    Нужен Redis 6.2+. Пакет создаёт подключение и хранит сессии
-                    и общий key ring в Redis. На всех репликах должны совпадать
-                    Redis, область ключей и EncryptionKey.
-                  </p>
-                  <Code
-                    label="Настройки через secret provider / environment"
-                    value={`ASPNETCORE_ENVIRONMENT=${setup.environment}\nConnectionStrings__Redis=<Redis connection>\nBff__EncryptionKey=<постоянный случайный секрет>\n${[setup, ...others].map((client) => `Bff__Clients__${client.name}__OpenIdConnect__ClientSecret=<OIDC client secret>`).join("\n")}`}
-                  />
-                  <p>
-                    Сгенерируйте EncryptionKey один раз через
-                    <code> openssl rand -base64 32</code> и сохраняйте между
-                    redeploy. Секреты остаются в серверной конфигурации.
-                  </p>
-                  <a href="https://github.com/Shulyakovskiy/MonixOne.OidcProxy.Yarp/blob/main/docs/SESSIONS.md">
-                    Шифрование, смена ключа и ошибки Redis ↗
-                  </a>
-                </>
-              )}
-              {step === 3 && (
-                <>
-                  <p>
-                    Подключите пакет и передайте корневую конфигурацию одним
-                    вызовом. YARP, Redis, forwarded headers и все BFF clients
-                    собираются внутри пакета.
-                  </p>
-                  {valid ? (
-                    <Code
-                      label="appsettings.json — без секретов"
-                      value={createConfiguration(setup, others)}
-                    />
-                  ) : (
-                    <p role="alert" className="doc-note doc-error">
-                      Сначала исправьте параметры на шаге «Топология».
+                  </div>
+                  <details>
+                    <summary>BR.Admin-Identity: Local и Dev</summary>
+                    <p>
+                      У клиента <code>br-admin-identity-bff</code> должен быть
+                      tenant mapping Identity. В админке React email/OTP создаёт
+                      cookie browser session Identity; затем вход проходит через
+                      GW Code/PKCE. Razor UI в Identity не нужен. Mobile OTP
+                      grant этот этап не заменяет.
                     </p>
-                  )}
-                  <Code label="Program.cs" value={hostCode} />
+                    <p>
+                      Для Local: GW <code>https://localhost:8443/admin/</code>,
+                      Identity <code>https://localhost:8444/</code>, SPA +
+                      Calendar API <code>http://127.0.0.1:8000/</code>.
+                      Запускайте <code>npm run start:calendar</code>: сервер
+                      только статики возвращает 404 на Calendar API.
+                    </p>
+                    <p>
+                      В BR.Admin-Identity общий <code>.env.local</code>:
+                      VITE_IDENTITY_ORIGIN, APP_URL, IDENTITY_ISSUER,
+                      IDENTITY_JWKS_URL и IDENTITY_AUDIENCE. Identity
+                      Cors:Origins должен разрешать HTTPS origin GW. Callback
+                      localhost регистрируется только в Local.
+                    </p>
+                    <p>
+                      Публичный Dev:{" "}
+                      <code>
+                        https://admin.id-dev.intra-beetroute.ru/admin/
+                      </code>
+                      . Готовые appsettings, ingress и tenant fragment остаются
+                      в <code>docs/examples/br-admin-identity/</code>. Для SPA
+                      assets нужен отдельный anonymous catch-all route, для
+                      user-management — свой cluster Identity.
+                    </p>
+                  </details>
+                </section>
+              )}
+              {native && (
+                <div className="doc-notice">
+                  <strong>SPA не подключена</strong>
                   <p>
-                    Замените KnownProxies на IP непосредственного
-                    балансировщика. Он сохраняет публичный Host и префикс
-                    приложения, передаёт X-Forwarded-Proto=https и
-                    перезаписывает forwarded headers. YARP и backend работают по
-                    HTTP в доверенной внутренней сети.
+                    В конфигурации нет Bff:Clients. Пакет сохраняет native YARP,
+                    JWT policies и балансировку. Оставшийся ClientSecret без
+                    PublicOrigin BFF не включает. Redis здесь нужен только
+                    компонентам GW, которые сами его используют.
+                  </p>
+                </div>
+              )}
+            </>
+          )}
+
+          {section === "flow" && (
+            <>
+              <div className="block-heading">
+                <h2>Компоненты</h2>
+                <label className="doc-toggle">
+                  <input
+                    type="checkbox"
+                    checked={native}
+                    onChange={(event) => setNative(event.target.checked)}
+                  />
+                  Без SPA
+                </label>
+              </div>
+              <Architecture native={native} />
+              <section className="doc-block">
+                <div className="block-heading">
+                  <h2>Жизненный цикл</h2>
+                  <span>Нажмите на этап</span>
+                </div>
+                {native && (
+                  <p className="doc-hint">
+                    Сценарии ниже показывают режим с подключённой SPA. В native
+                    режиме пакет не выполняет эти OIDC-обмены и не создаёт
+                    BFF-сессии.
+                  </p>
+                )}
+                <div className="segmented flow-tabs" aria-label="Сценарии">
+                  {(Object.keys(flows) as (keyof typeof flows)[]).map((key) => (
+                    <button
+                      key={key}
+                      type="button"
+                      aria-pressed={flow === key}
+                      onClick={() => {
+                        setFlow(key);
+                        setFlowStep(0);
+                      }}
+                    >
+                      {key === "connections"
+                        ? "Calendar / cookies"
+                        : flows[key].title}
+                    </button>
+                  ))}
+                </div>
+                <p>{currentFlow.summary}</p>
+                <Sequence flow={flow} step={flowStep} title={detail[0]} />
+                <div className="flow-layout">
+                  <nav className="flow-steps" aria-label="Этапы сценария">
+                    {currentFlow.steps.map(([title], index) => (
+                      <button
+                        type="button"
+                        key={title}
+                        aria-current={flowStep === index ? "step" : undefined}
+                        onClick={() => setFlowStep(index)}
+                      >
+                        <span>{index + 1}</span>
+                        {title}
+                      </button>
+                    ))}
+                  </nav>
+                  <div className="flow-detail" aria-live="polite">
+                    <small>
+                      Этап {flowStep + 1} / {currentFlow.steps.length}
+                    </small>
+                    <h3>{detail[0]}</h3>
+                    <p>{detail[1]}</p>
+                    <div className="doc-notice">{detail[2]}</div>
+                    <div className="doc-pagination">
+                      <button
+                        type="button"
+                        disabled={flowStep === 0}
+                        onClick={() => setFlowStep(flowStep - 1)}
+                      >
+                        ← Назад
+                      </button>
+                      <button
+                        type="button"
+                        disabled={flowStep === currentFlow.steps.length - 1}
+                        onClick={() => setFlowStep(flowStep + 1)}
+                      >
+                        Следующий этап →
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </section>
+              <section className="doc-block">
+                <h2>Порядок middleware</h2>
+                <div className="pipeline" aria-label="Порядок middleware">
+                  {pipeline.map(([title], index) => (
+                    <button
+                      type="button"
+                      key={title}
+                      aria-pressed={middleware === index}
+                      onClick={() => setMiddleware(index)}
+                    >
+                      <span>{index + 1}</span>
+                      {title}
+                    </button>
+                  ))}
+                </div>
+                <div className="diagram-detail" aria-live="polite">
+                  <strong>{pipeline[middleware]![0]}</strong>
+                  <p>{pipeline[middleware]![1]}</p>
+                </div>
+                <p className="doc-hint">
+                  Forwarded headers включают XForwardedFor | XForwardedProto |
+                  XForwardedHost. В GW этот блок не дублируется.
+                </p>
+              </section>
+            </>
+          )}
+
+          {section === "routes" && (
+            <>
+              <h2>Проверить решение GW</h2>
+              <p>
+                Переключайте условия: модель показывает, какой запрос будет
+                отклонён, а какой дойдёт до сервиса.
+              </p>
+              <RouteInspector />
+              <section className="doc-block">
+                <h2>Маршруты без дублирования</h2>
+                <div className="table-scroll">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Маршрут</th>
+                        <th>Граница</th>
+                        <th>Конфигурация</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td>SPA / assets</td>
+                        <td>Anonymous, без серверного Bearer</td>
+                        <td>
+                          Точный host, catch-all последним, AuthorizationPolicy:
+                          anonymous
+                        </td>
+                      </tr>
+                      <tr>
+                        <td>API приложения</td>
+                        <td>Cookie + X-CSRF + server session</td>
+                        <td>Точный host; клиент выбирается автоматически</td>
+                      </tr>
+                      <tr>
+                        <td>Native API</td>
+                        <td>Исходный JWT / scope policy</td>
+                        <td>Существующий route на host gateway</td>
+                      </tr>
+                      <tr>
+                        <td>OAuth callback приложения</td>
+                        <td>Без BFF-сессии; backend state/cookie</td>
+                        <td>Точные host + path + method, anonymous</td>
+                      </tr>
+                      <tr>
+                        <td>{paths.user}</td>
+                        <td>Claims текущей BFF-сессии</td>
+                        <td>Регистрирует пакет; X-CSRF: 1</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <p>
+                  Смешанные Hosts и wildcard не получают BFF-токен. RouteId не
+                  нужно повторять в Bff:Clients:Routes. Policies и балансировка
+                  обычного YARP сохраняются.
+                </p>
+                <details>
+                  <summary>Что важно для /admin и нескольких SPA</summary>
+                  <p>
+                    PublicOrigin не содержит пути. Для /admin задайте PathBase:
+                    /admin, base SPA: /admin/ и callbacks с этим префиксом.
+                    Балансировщик сохраняет префикс, пакет снимает его до
+                    routing. Match.Path описывает путь после снятия PathBase.
                   </p>
                   <p>
-                    В ReverseProxy — штатные маршруты и destinations. В
-                    Bff:Clients:Routes — привязки по RouteId, AllowAnonymous для
-                    SPA assets и необязательная CookiePolicy. Пакет сам
-                    подключает middleware и MapReverseProxy.
+                    Каждая SPA использует отдельный HTTPS host/port и свой
+                    confidential client. Cookie names, серверные сессии и OIDC
+                    handlers изолированы. Два клиента с одним effective origin
+                    не допускаются.
                   </p>
                   <p>
-                    Для размещения под путём согласуйте BFF PathBase, SPA base и
-                    callback URI. Сохраните префикс на балансировщике.
+                    Пустое поле Routes лучше полностью не задавать: явные
+                    bindings имеют приоритет и сохраняют строгую выборочную
+                    привязку. Корневую конфигурацию передавайте в AddOidcProxy,
+                    а не секцию Bff.
+                  </p>
+                </details>
+              </section>
+            </>
+          )}
+
+          {section === "sessions" && (
+            <>
+              <div className="facts">
+                <div>
+                  <small>Idle по умолчанию</small>
+                  <strong>20 минут</strong>
+                  <span>От принятого защищённого запроса</span>
+                </div>
+                <div>
+                  <small>Absolute по умолчанию</small>
+                  <strong>8 часов</strong>
+                  <span>Не продлевается refresh</span>
+                </div>
+                <div>
+                  <small>Refresh budget</small>
+                  <strong>30 секунд</strong>
+                  <span>Один CAS-владелец на сессию</span>
+                </div>
+              </div>
+              <details>
+                <summary>Настроить сроки сессии</summary>
+                <p>
+                  У клиента задаются SessionIdleTimeout и SessionAbsoluteTimeout
+                  в формате TimeSpan, например 00:20:00 и 08:00:00. Оба срока
+                  положительные; absolute не меньше idle и не больше 365 дней.
+                  Refresh budget фиксирован.
+                </p>
+              </details>
+              <details open>
+                <summary>Что хранится и чем шифруется</summary>
+                <p>
+                  Сессия с ticket, claims и токенами — JWE в Redis: jose-jwt,
+                  PBES2-HS256+A128KW + A256GCM. Соль, IV и ключ содержимого
+                  создаёт библиотека. EncryptionKey — пароль PBES2;
+                  Base64-строка не декодируется в raw AES key.
+                </p>
+                <p>
+                  Cookie со случайной ссылкой, OIDC state и antiforgery защищает
+                  ASP.NET Core Data Protection. Общий key ring хранится в Redis,
+                  descriptors зашифрованы тем же EncryptionKey. SessionKey
+                  связывает payload с приложением, окружением, клиентом и
+                  session ID.
+                </p>
+                <Code
+                  label="Область Redis"
+                  value={`{application}:{environment}:{namespace}:{client}:sessions:{id}\n{application}:{environment}:{namespace}:data-protection`}
+                />
+                <p>
+                  Session TTL ограничен idle и absolute. У framework key ring
+                  нет session TTL. Потеря key ring делает cookies/state
+                  нечитаемыми. Нужен Redis 6.2+. Настройте TLS/ACL, persistence
+                  и eviction Redis.
+                </p>
+              </details>
+              <details>
+                <summary>Реплики, refresh и logout</summary>
+                <p>
+                  На репликах совпадают Redis, ApplicationName, EnvironmentName,
+                  KeyNamespace и EncryptionKey. EnvironmentName берётся у host;
+                  сегменты Redis scope приводятся к lowercase. Разным окружениям
+                  нужны отдельные scope и секреты.
+                </p>
+                <p>
+                  Refresh начинается в окне min(30 секунд, 10% срока access
+                  token). В реплике запросы ждут общую задачу; между репликами
+                  владение определяется CAS. Отмена одного ожидающего не
+                  отменяет остальные запросы. Неизвестный исход обмена не
+                  повторяется, просроченный pending marker завершает сессию.
+                </p>
+                <p>
+                  Logout выполняет GETDEL. Поздний refresh не восстанавливает
+                  запись. Antiforgery/logout не ждут refresh. Revocation
+                  выполняется best effort; уже отправленные API-запросы logout
+                  не отменяет.
+                </p>
+                <p>
+                  Статика, anonymous routes и antiforgery не продлевают idle.
+                  Sample polling раз в минуту в видимой вкладке поддерживает
+                  idle даже без кликов; absolute lifetime остаётся прежним.
+                </p>
+              </details>
+              <details>
+                <summary>Миграция конфигурации на 8.1</summary>
+                <p>
+                  Передавайте корневую configuration в AddOidcProxy. Для точных
+                  Match.Hosts удалите повторяющиеся Bff:Clients:Routes; узкие
+                  выборочные bindings можно сохранить. Замените списки cookies
+                  на ForwardCookies только для доверенных backend.
+                </p>
+                <p>
+                  Формат сессий совместим с 7.x. Старые OidcProxy.Client /
+                  OidcProxy.CookiePolicy в YARP Metadata заменяются клиентскими
+                  Routes. При переходе с action overload проверьте регистрацию
+                  общего Redis.
+                </p>
+              </details>
+              <details>
+                <summary>Смена ключа, миграция с 6.x и backup</summary>
+                <ol>
+                  <li>Остановить старые реплики.</li>
+                  <li>
+                    Задать новый KeyNamespace и одинаковый новый EncryptionKey
+                    на всех репликах.
+                  </li>
+                  <li>Запустить BFF; пользователи входят заново.</li>
+                  <li>
+                    После отключения старых реплик удалить прежние session keys
+                    и framework key ring.
+                  </li>
+                </ol>
+                <p>
+                  Формат 6.x не читается. Бесшовной ротации нескольких
+                  EncryptionKey нет. Старый backup может вернуть удалённые
+                  сессии и credentials: при восстановлении сбрасывайте область
+                  сессий и/или отзывайте grants у IdP. Шифрование не защищает от
+                  отката backup.
+                </p>
+                <p>
+                  При потере подтверждения записи может остаться недоступная
+                  сессия до TTL. Redis и IdP не образуют общей транзакции:
+                  потерянный ответ IdP может оставить неизвестный BFF токен.
+                  Результат revocation не гарантируется.
+                </p>
+              </details>
+              <section className="doc-block">
+                <h2>Cookies Calendar и других приложений</h2>
+                <p>
+                  Для доверенного backend достаточно{" "}
+                  <code>ForwardCookies: true</code>. Имена cookies и
+                  provider-specific paths в BFF перечислять не нужно.
+                </p>
+                {valid && (
+                  <Code
+                    label="Фрагмент cookie bridge и точного callback"
+                    value={createCookieConfiguration(setup)}
+                  />
+                )}
+                <details>
+                  <summary>Гарантии и ограничения bridge</summary>
+                  <ul>
+                    <li>
+                      Namespace разделяет BFF client и YARP cluster; backend
+                      получает только исходные имена своего cluster.
+                    </li>
+                    <li>
+                      BFF/OIDC cookies и произвольные browser
+                      Cookie/Authorization не передаются.
+                    </li>
+                    <li>
+                      Browser cookie имеет префикс __Host-Http-, Path=/ и не
+                      содержит Domain. Secure и HttpOnly обязательны. Явный
+                      SameSite сохраняется, отсутствующий становится Lax.
+                    </li>
+                    <li>
+                      Backend Path вместе с PathBase проверяется сервером с
+                      учётом регистра и границ сегментов. Scope кодируется в
+                      browser имени; backend получает исходное имя и
+                      непрозрачное значение. Max-Age/Expires не продлеваются.
+                      Произвольные YARP rewrites автоматически не инвертируются.
+                    </li>
+                    <li>
+                      Чужой origin не получает cookies на wildcard/public
+                      routes. Исключение — точный anonymous callback с
+                      ограниченными methods.
+                    </li>
+                    <li>
+                      Backend проверяет state/nonce, TTL и однократность.
+                      Повреждённый Set-Cookie — 502; дубли browser cookies —
+                      400. Ответ с cookies получает no-store.
+                    </li>
+                  </ul>
+                </details>
+                <details>
+                  <summary>Cookie tossing и обновление пакета</summary>
+                  <p>
+                    __Host- требует Secure, Path=/ и отсутствие Domain. Поэтому
+                    совместимый браузер отвергает cookie, которую соседний
+                    поддомен пытается установить для родительского домена.
+                    __Host-Http- дополнительно требует установку через HTTP с
+                    HttpOnly в поддерживающих этот префикс браузерах. Защита не
+                    требует новых настроек GW, ключей или provider-specific
+                    policies.
+                  </p>
+                  <p>
+                    CookiePolicies также используют защищённый префикс и browser
+                    Path=/; их Path ограничивает forwarding на сервере. Это не
+                    расширяет доступ backend к cookies других клиентов, cluster
+                    или путей.
+                  </p>
+                  <p>
+                    Обновите все реплики: старый bridge не должен оставаться в
+                    трафике. Прежние __Secure- cookies не принимаются;
+                    незавершённое внешнее OAuth-подключение нужно начать заново.
+                    Формат BFF-сессий и OAuth tokens не меняется. Старые cookies
+                    можно дождаться по их TTL.
+                  </p>
+                  <p>
+                    Cookies не изолируются по портам одного hostname. Для
+                    недоверенных приложений используйте разные hostname. Bridge
+                    не заменяет backend-проверку state/nonce, срока и
+                    однократности и не устраняет XSS в самом origin приложения.
+                  </p>
+                </details>
+                <details>
+                  <summary>Узкие CookiePolicies: совместимость с 8.0</summary>
+                  <p>
+                    Для выборочного allowlist остаются явные Bff:Clients:Routes
+                    и CookiePolicies. Политика route имеет приоритет над
+                    ForwardCookies. Задаются ClusterId, Names (точные имена или
+                    prefix*), серверный Path, SameSite и MaxAge — верхняя
+                    граница persistent expiry; session cookie остаётся session
+                    cookie.
+                  </p>
+                  <p>
+                    Неизвестная политика или неправильный ClusterId отклоняются
+                    при старте. Cross-site POST требует точного POST callback и
+                    явного SameSite=None и в policy, и в backend cookie.
+                    Отсутствующий SameSite не ослабляется до None.
+                  </p>
+                  <p>
+                    При параллельных транзакциях backend создаёт уникальные
+                    correlation names. Logout BFF не отменяет прикладные
+                    OAuth-транзакции.
+                  </p>
+                </details>
+              </section>
+            </>
+          )}
+
+          {section === "checks" && (
+            <>
+              <div className="doc-notice">
+                <strong>CI не требует запущенной связки сервисов</strong>
+                <p>
+                  GW использует TestServer, тестовые upstream и собственные
+                  JWT-ключи/metadata. Identity запускается внутри
+                  WebApplicationFactory. Redis/PostgreSQL создаются через
+                  Testcontainers. Нужен рабочий Docker; production credentials
+                  не нужны.
+                </p>
+              </div>
+              <div className="check-columns">
+                <div>
+                  <h2>Автотесты</h2>
+                  <Code
+                    label="Пакет .NET"
+                    value={`dotnet restore MonixOne.OidcProxy.Yarp.sln\ndotnet build tests/MonixOne.OidcProxy.Yarp.Tests -c Release -p:GeneratePackageOnBuild=false\npwsh tests/MonixOne.OidcProxy.Yarp.Tests/bin/Release/net10.0/playwright.ps1 install --with-deps --only-shell chromium\ndotnet test --project tests/MonixOne.OidcProxy.Yarp.Tests/MonixOne.OidcProxy.Yarp.Tests.csproj -c Release --no-build\nmake tools-restore\nmake format-check`}
+                  />
+                  <details>
+                    <summary>Самодостаточные браузерные тесты</summary>
+                    <p>
+                      Microsoft.Playwright работает в том же xUnit-проекте.
+                      WebApplicationFactory запускает пакет на HTTPS Kestrel;
+                      Redis/PostgreSQL поднимаются Testcontainers, Identity и
+                      provider/backend заменяются локальными HTTP fixtures.
+                      Chromium использует отдельные browser contexts и тестовые
+                      origins, привязанные к loopback; доверие ограничено
+                      сертификатом fixture. Рабочие GW/Identity, Google и
+                      production credentials не нужны.
+                    </p>
+                    <p>
+                      Проверяются настоящий Code/PKCE-вход, попытки cookie
+                      tossing через Set-Cookie и JavaScript соседнего
+                      HTTPS-поддомена, нормальный cross-site Calendar callback,
+                      однократность и удаление state cookie, directory API без
+                      callback cookie, отказ от старого формата и серверные
+                      границы Path.
+                    </p>
+                    <Code
+                      label="Только браузерные сценарии"
+                      value={`dotnet test --project tests/MonixOne.OidcProxy.Yarp.Tests/MonixOne.OidcProxy.Yarp.Tests.csproj -c Release --no-build -- --filter-class MonixOne.OidcProxy.Yarp.Tests.BrowserCookieBridgeTests`}
+                    />
+                    <p>
+                      Браузер устанавливается один раз после build; CI делает
+                      это явно перед тестами. Тесты не пропускаются при его
+                      отсутствии. Если PowerShell недоступен, при установленном
+                      Node можно вызвать тот же CLI:{" "}
+                      <code>
+                        node
+                        tests/MonixOne.OidcProxy.Yarp.Tests/bin/Release/net10.0/.playwright/package/cli.js
+                        install --only-shell chromium
+                      </code>
+                      . На Linux системные библиотеки браузера должны быть
+                      установлены.
+                    </p>
+                  </details>
+                  <Code
+                    label="Sample и документация"
+                    value={`cd samples/MonixOne.OidcProxy.Yarp.SampleHost/ClientApp\ncorepack pnpm install --frozen-lockfile\ncorepack pnpm test\ncorepack pnpm build\ncorepack pnpm docs:build`}
+                  />
+                  <p className="doc-hint">
+                    SDK закреплён в global.json; Node/pnpm — в package.json.
+                    Единственный C# formatter — CSharpier из tool manifest. Не
+                    накладывайте dotnet format whitespace поверх него.
                   </p>
                   <details>
-                    <summary>Прикладная cookie для внешнего callback</summary>
+                    <summary>Сборка NuGet и sample</summary>
+                    <Code
+                      label="Сборка и упаковка"
+                      value={`dotnet build src/MonixOne.OidcProxy.Yarp/MonixOne.OidcProxy.Yarp.csproj -c Release\ndotnet pack src/MonixOne.OidcProxy.Yarp/MonixOne.OidcProxy.Yarp.csproj -c Release --no-build -o artifacts/nuget\ndotnet publish samples/MonixOne.OidcProxy.Yarp.SampleHost -c Release`}
+                    />
                     <p>
-                      CookiePolicy нужна только приложениям с техническими
-                      state/correlation cookies. Start защищён сессией и X-CSRF;
-                      точный callback разрешает внешнюю навигацию, а backend
-                      проверяет state.
+                      Перед CI потребителя пакет должен быть доступен в
+                      NuGet-feed или как CI-артефакт. Локальный NuGet-кэш
+                      разработчика runner не получает. Публикация выполняется
+                      отдельно.
                     </p>
-                    {valid && (
-                      <Code
-                        label="Cookie policy и routes — добавить к конфигурации"
-                        value={createCookieConfiguration(setup)}
-                      />
-                    )}
-                    <a href="https://github.com/Shulyakovskiy/MonixOne.OidcProxy.Yarp/blob/main/docs/COOKIES.md">
-                      Контракт прикладных cookies ↗
-                    </a>
                   </details>
+                </div>
+                <div>
+                  <h2>В своём окружении</h2>
                   <p>
-                    <a href="https://github.com/Shulyakovskiy/MonixOne.OidcProxy.Yarp/blob/main/docs/BR-ADMIN-IDENTITY.md">
-                      Готовый профиль BR.Admin-Identity ↗
-                    </a>
+                    Отметки — локальный checklist, не автоматическое
+                    подтверждение готовности.
                   </p>
-                </>
-              )}
-              {step === 4 && (
-                <>
-                  <p>
-                    Устанавливайте <code>X-CSRF: 1</code> для всех BFF data
-                    endpoints и проксируемых API, включая GET. CORS-доступ к
-                    session API с другого origin не предусмотрен.
-                  </p>
-                  <p>
-                    Login вызывайте навигацией. Logout отправляйте native POST
-                    form. ReturnUrl принимает локальный путь с query/fragment.
-                    Внешний URL или повтор параметра отклоняется до
-                    login/logout.
-                  </p>
-                  <Code
-                    label="Login и чтение сессии"
-                    value={createSpaCode(setup.pathBase)}
-                  />
-                  <p>
-                    Sample использует официальный{" "}
-                    <code>@tanstack/react-query</code>, а не OAuth SDK для
-                    public SPA. <code>src/session.ts</code> обновляет данные при
-                    focus/reconnect. Авторизованная видимая вкладка проверяет
-                    сессию каждые 60 секунд.
-                  </p>
-                  <p>
-                    Автоматические retries и фоновый polling отключены. Absolute
-                    session lifetime ограничивает сервер.
-                  </p>
-                  <Code
-                    label="Native POST logout с framework antiforgery token"
-                    value={`const response = await fetch(${JSON.stringify(targetRoutes.antiforgery)}, {\n  credentials: "same-origin", headers: { "X-CSRF": "1" },\n});\nif (!response.ok) throw new Error(\`BFF returned \${response.status}\`);\nconst { requestToken, formFieldName } = await response.json();\nconst form = document.createElement("form");\nform.method = "POST";\nform.action = ${JSON.stringify(targetRoutes.logout)};\nconst field = document.createElement("input");\nfield.type = "hidden";\nfield.name = formFieldName;\nfield.value = requestToken;\nform.append(field);\ndocument.body.append(form);\nform.submit();`}
-                  />
-                  <p>
-                    Перед logout отменяйте текущие query и блокируйте новые
-                    UI-запросы. После 401 очищайте кэш пользователя и API. После
-                    503 показывайте недоступность, без автоматического повтора
-                    POST/refresh или перенаправления в бесконечный login.
-                  </p>
-                </>
-              )}
-              {step === 5 && (
-                <>
-                  <p>
-                    Проверки ниже выполняет оператор на своём окружении. Эта
-                    страница не подключается к вашим серверам и не подтверждает
-                    работоспособность конфигурации.
-                  </p>
-                  <div className="doc-checklist">
+                  <div className="doc-checks deployment-checks">
                     {[
-                      "Login с пустыми cookies проходит browser login провайдера и возвращает в SPA.",
-                      "Session/API с cookie и X-CSRF работают; API проверяет audience, scopes и роли.",
-                      "Без сессии — 401, при нарушении CSRF/авторизации — 403, при недоступности Redis — 503.",
-                      "Native logout завершает локальную сессию; следующий запрос требует нового входа.",
-                      "Балансировщик передаёт правильные scheme/host; у реплик общие Redis и EncryptionKey.",
+                      "HTTPS, DNS и точные callback URI зарегистрированы у Identity.",
+                      "Балансировщик сохраняет Host/PathBase; доверены реальные proxy IP/CIDR.",
+                      "Login с пустыми cookies → claims → защищённый API проходит полностью.",
+                      "Без сессии — 401; без X-CSRF или при чужом Origin — 403.",
+                      "Native JWT, scopes, Swagger и балансировка работают с BFF и без SPA.",
+                      "Calendar callback проверяет state/cookie и однократность на backend.",
+                      "Logout закрывает сессию; поздний refresh её не восстанавливает.",
+                      "У реплик общие Redis scope и EncryptionKey; при отказе Redis — 503.",
+                      "В логах/APM нет cookies, OAuth tokens и query с code/state.",
                     ].map((item) => (
                       <label key={item}>
                         <input type="checkbox" />
@@ -454,102 +1163,101 @@ export default function Documentation() {
                       </label>
                     ))}
                   </div>
-                  <a href="https://github.com/Shulyakovskiy/MonixOne.OidcProxy.Yarp/blob/main/docs/TESTING.md">
-                    Автотесты и сборка пакета ↗
-                  </a>
-                </>
-              )}
-              <div className="doc-pagination">
-                <button
-                  className="secondary"
-                  disabled={step === 0}
-                  onClick={() => setStep(step - 1)}
-                >
-                  ← Назад
-                </button>
-                <span>
-                  {step + 1} / {steps.length}
-                </span>
-                {step < steps.length - 1 ? (
-                  <button onClick={() => setStep(step + 1)}>Далее →</button>
-                ) : (
-                  <button onClick={() => setSection("flows")}>
-                    Как работает SPA →
-                  </button>
-                )}
-              </div>
-            </article>
-          </div>
-        ) : (
-          <article className="doc-panel doc-explainer">
-            <p className="doc-kicker">ЖИЗНЕННЫЙ ЦИКЛ СЕССИИ</p>
-            <h2>От первого входа до logout</h2>
-            <div className="doc-flow-tabs" aria-label="Сценарии SPA">
-              {(Object.keys(flows) as (keyof typeof flows)[]).map((key) => (
-                <button
-                  key={key}
-                  aria-pressed={flow === key}
-                  onClick={() => {
-                    setFlow(key);
-                    setFlowStep(0);
-                  }}
-                >
-                  {flows[key].title}
-                </button>
-              ))}
-            </div>
-            <h3>{current.title}</h3>
-            <p>{current.summary}</p>
-            <div className="doc-flow-layout">
-              <nav className="doc-flow-steps" aria-label="Этапы сценария">
-                {current.steps.map(([title], index) => (
-                  <button
-                    key={title}
-                    aria-current={flowStep === index ? "step" : undefined}
-                    onClick={() => setFlowStep(index)}
-                  >
-                    <span>{index + 1}</span>
-                    {title}
-                  </button>
-                ))}
-              </nav>
-              <div className="doc-flow-detail" aria-live="polite">
-                <p className="doc-kicker">
-                  ЭТАП {flowStep + 1} / {current.steps.length}
-                </p>
-                <h3>{detail[0]}</h3>
-                <p>{detail[1]}</p>
-                <p className="doc-note">{detail[2]}</p>
-                <div className="doc-pagination">
-                  <button
-                    className="secondary"
-                    disabled={flowStep === 0}
-                    onClick={() => setFlowStep(flowStep - 1)}
-                  >
-                    Предыдущий этап
-                  </button>
-                  <button
-                    disabled={flowStep === current.steps.length - 1}
-                    onClick={() => setFlowStep(flowStep + 1)}
-                  >
-                    Следующий этап
-                  </button>
+                  <details>
+                    <summary>Локальный sample и hot reload</summary>
+                    <Code
+                      label="Sample host"
+                      value={`# Настроить samples/.../appsettings.json и серверные секреты\ndotnet dev-certs https --trust\n# После pnpm build в ClientApp:\ndotnet run --project samples/MonixOne.OidcProxy.Yarp.SampleHost --urls https://localhost:5001`}
+                    />
+                    <p>
+                      Sample и /docs обслуживаются из wwwroot. Для Vite задайте
+                      доверенные DEV_HTTPS_CERT / DEV_HTTPS_KEY,
+                      BFF_TARGET=https://localhost:5001 и запустите pnpm dev.
+                      При необходимости задайте NODE_EXTRA_CA_CERTS.
+                      Origin/callback/Match.Hosts согласуются с портом 5173;
+                      PathBase — с Vite base и proxy paths.
+                    </p>
+                  </details>
                 </div>
               </div>
-            </div>
-            <p>
-              <a href="https://github.com/Shulyakovskiy/MonixOne.OidcProxy.Yarp/blob/main/docs/SESSIONS.md">
-                Подробнее о сессиях, конкурентном refresh и ошибках
-                инфраструктуры ↗
-              </a>
-            </p>
-          </article>
-        )}
-      </main>
-      <footer className="doc-footer">
-        <span>MonixOne.OidcProxy.Yarp · LGPL-3.0-only</span>
-        <span>Статическая документация · секреты не запрашиваются</span>
-      </footer>
+              <section className="doc-block">
+                <h2>Если что-то не работает</h2>
+                <div className="table-scroll">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Симптом</th>
+                        <th>Что проверить</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td>404</td>
+                        <td>
+                          PathBase и SPA base; Match.Path после снятия префикса;
+                          запущен ли API, а не только статический сервер;
+                          объявлен ли профиль для /.auth.
+                        </td>
+                      </tr>
+                      <tr>
+                        <td>401</td>
+                        <td>
+                          BFF cookie/сессия и expiry; у native API — JWT
+                          issuer/audience/signature. Повреждённый JWE, другой
+                          ключ или неверный SessionKey тоже завершают сессию.
+                        </td>
+                      </tr>
+                      <tr>
+                        <td>403</td>
+                        <td>
+                          X-CSRF: 1, Origin/Sec-Fetch-Site, точный Match.Hosts,
+                          scope/roles. Bearer не заменяет BFF-сессию.
+                        </td>
+                      </tr>
+                      <tr>
+                        <td>400 / 502</td>
+                        <td>
+                          Дубликаты cookies или неправильный Set-Cookie;
+                          недоступный upstream даёт 502. Не повторять POST
+                          автоматически.
+                        </td>
+                      </tr>
+                      <tr>
+                        <td>503</td>
+                        <td>
+                          Redis, budget refresh или неизвестный результат
+                          Redis/IdP. Без memory fallback; после неудачного
+                          refresh следующий запрос может дать 401.
+                        </td>
+                      </tr>
+                      <tr>
+                        <td>CORS / «сервер недоступен»</td>
+                        <td>
+                          HTTPS-сертификат и точный Cors:Origins. Порт является
+                          частью origin. Vite-preview без GW не обслуживает BFF
+                          endpoints.
+                        </td>
+                      </tr>
+                      <tr>
+                        <td>Ошибка startup</td>
+                        <td>
+                          PublicOrigin активного профиля, confidential
+                          ClientId/ClientSecret, EncryptionKey, Redis scope и
+                          отсутствие открытого legacy key ring.
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            </>
+          )}
+          <footer className="doc-footer">
+            <span>MonixOne.OidcProxy.Yarp · LGPL-3.0-only</span>
+            <span>Генератор не выполняет сетевые проверки</span>
+          </footer>
+        </main>
+      </div>
     </div>
   );
 }

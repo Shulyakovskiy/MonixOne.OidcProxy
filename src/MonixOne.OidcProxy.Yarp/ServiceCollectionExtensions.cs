@@ -35,13 +35,61 @@ public static class ServiceCollectionExtensions
     )
     {
         ArgumentNullException.ThrowIfNull(configuration);
-        services.TryAddSingleton(sp =>
-            ConnectionMultiplexer.Connect(
-                configuration.GetConnectionString("Redis")
-                    ?? throw new InvalidOperationException("ConnectionStrings:Redis is required.")
+        if (services.Any(descriptor => descriptor.ServiceType == typeof(IProxyStateLookup)))
+            throw new InvalidOperationException(
+                "AddOidcProxy(configuration) must be the single YARP registration."
+            );
+
+        // Freeze BFF settings and the Redis configuration key for this host.
+        var snapshot = new ConfigurationBuilder()
+            .AddInMemoryCollection(
+                configuration.GetSection("Bff").AsEnumerable(makePathsRelative: true)
+            )
+            .Build();
+        var clients = snapshot
+            .GetSection("Clients")
+            .GetChildren()
+            .Where(client =>
+                client.GetSection(nameof(OidcProxyClientOptions.PublicOrigin)).Exists()
+            )
+            .ToArray();
+        var connectionInterface = services.LastOrDefault(descriptor =>
+            descriptor.ServiceType == typeof(IConnectionMultiplexer)
+        );
+        if (connectionInterface?.ImplementationInstance is ConnectionMultiplexer existingConnection)
+            services.TryAddSingleton(existingConnection);
+        else
+            services.TryAddSingleton(sp =>
+            {
+                if (connectionInterface is not null)
+                    return sp.GetRequiredService<IConnectionMultiplexer>() as ConnectionMultiplexer
+                        ?? throw new InvalidOperationException(
+                            "OidcProxy requires the existing IConnectionMultiplexer to be a ConnectionMultiplexer."
+                        );
+                var key = sp.GetRequiredService<
+                    IOptions<ProxyOptions>
+                >().Value.RedisConnectionStringKey;
+                var connection = configuration[key];
+                if (string.IsNullOrWhiteSpace(connection))
+                    throw new InvalidOperationException(
+                        $"Redis configuration '{key}' is required."
+                    );
+                return ConnectionMultiplexer.Connect(connection);
+            });
+        AddRedisAlias(services);
+        services.AddReverseProxy().LoadFromConfig(configuration.GetRequiredSection("ReverseProxy"));
+        services.AddCors(options =>
+            options.AddPolicy(
+                OidcProxyDefaults.CorsPolicy,
+                policy =>
+                    policy
+                        .WithOrigins(configuration.GetSection("Cors:Origins").Get<string[]>() ?? [])
+                        .AllowAnyHeader()
+                        .AllowAnyMethod()
+                        .AllowCredentials()
+                        .WithExposedHeaders(GatewayTraceTransformProvider.CorrelationHeader)
             )
         );
-        services.AddReverseProxy().LoadFromConfig(configuration.GetRequiredSection("ReverseProxy"));
         services.Configure<ForwardedHeadersOptions>(options =>
         {
             options.ForwardedHeaders =
@@ -56,36 +104,54 @@ public static class ServiceCollectionExtensions
             foreach (var host in forwarded.GetSection("AllowedHosts").Get<string[]>() ?? [])
                 options.AllowedHosts.Add(host);
         });
-        // All BFF schemes and the frozen client registry must use the same
-        // startup values, including when native options are later recreated.
-        var snapshot = new ConfigurationBuilder()
-            .AddInMemoryCollection(
-                configuration.GetRequiredSection("Bff").AsEnumerable(makePathsRelative: true)
-            )
-            .Build();
-        var clients = snapshot.GetRequiredSection("Clients").GetChildren();
-        services.AddOidcProxy(snapshot.Bind);
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<ITransformProvider, GatewayTraceTransformProvider>()
+        );
+        if (clients.Length == 0)
+        {
+            services.AddOptions<ProxyOptions>().Configure(snapshot.Bind);
+            services.AddAuthentication();
+            services.AddAuthorization();
+        }
+        else
+        {
+            services.AddOidcProxy(snapshot.Bind);
+            foreach (var client in clients)
+            {
+                var oidcConfiguration = client.GetRequiredSection("OpenIdConnect");
+                services.AddOidcProxyClient(
+                    client.Key,
+                    options =>
+                    {
+                        options.AutoBindRoutes = !client
+                            .GetSection(nameof(OidcProxyClientOptions.Routes))
+                            .Exists();
+                        client.Bind(options);
+                    },
+                    oidc =>
+                    {
+                        // Explicit scopes replace the native openid/profile defaults.
+                        if (
+                            oidcConfiguration
+                                .GetSection(nameof(OpenIdConnectOptions.Scope))
+                                .Exists()
+                        )
+                            oidc.Scope.Clear();
+                        oidcConfiguration.Bind(oidc);
+                    }
+                );
+            }
+        }
         services
             .AddOptions<ProxyOptions>()
             .Configure<IHostEnvironment>(
                 (options, environment) => options.EnvironmentName = environment.EnvironmentName
-            );
-        foreach (var client in clients)
-        {
-            var oidcConfiguration = client.GetRequiredSection("OpenIdConnect");
-            services.AddOidcProxyClient(
-                client.Key,
-                options => client.Bind(options),
-                oidc =>
-                {
-                    // ConfigurationBinder appends to preinitialized collections. An
-                    // explicit scope list must replace the native openid/profile defaults.
-                    if (oidcConfiguration.GetSection(nameof(OpenIdConnectOptions.Scope)).Exists())
-                        oidc.Scope.Clear();
-                    oidcConfiguration.Bind(oidc);
-                }
-            );
-        }
+            )
+            .Validate(
+                options => !string.IsNullOrWhiteSpace(options.RedisConnectionStringKey),
+                "Bff:RedisConnectionStringKey must name a configuration value."
+            )
+            .ValidateOnStart();
 
         return services;
     }
@@ -109,6 +175,17 @@ public static class ServiceCollectionExtensions
             throw new InvalidOperationException(
                 "Register shared AddOidcProxy once, then AddOidcProxyClient for each SPA."
             );
+        var concrete = services.Last(d => d.ServiceType == typeof(ConnectionMultiplexer));
+        var alias = services.LastOrDefault(d => d.ServiceType == typeof(IConnectionMultiplexer));
+        if (
+            concrete.ImplementationInstance is { } connection
+            && alias?.ImplementationInstance is { } other
+            && !ReferenceEquals(connection, other)
+        )
+            throw new InvalidOperationException(
+                "ConnectionMultiplexer and IConnectionMultiplexer must resolve to the same shared connection."
+            );
+        AddRedisAlias(services);
         services
             .AddOptions<ProxyOptions>()
             .Configure(configure)
@@ -124,6 +201,9 @@ public static class ServiceCollectionExtensions
                 "Bff:EncryptionKey is required and must contain a strong random secret."
             )
             .ValidateOnStart();
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<ITransformProvider, GatewayTraceTransformProvider>()
+        );
         services.AddSingleton<BffClients>();
         services.AddHttpContextAccessor();
         services.AddAuthentication();
@@ -148,6 +228,17 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<BffTransformProvider>()
         );
         return services;
+    }
+
+    private static void AddRedisAlias(IServiceCollection services)
+    {
+        var registration = services.Last(d => d.ServiceType == typeof(ConnectionMultiplexer));
+        if (registration.ImplementationInstance is ConnectionMultiplexer connection)
+            services.TryAddSingleton<IConnectionMultiplexer>(connection);
+        else
+            services.TryAddSingleton<IConnectionMultiplexer>(sp =>
+                sp.GetRequiredService<ConnectionMultiplexer>()
+            );
     }
 
     /// <summary>
