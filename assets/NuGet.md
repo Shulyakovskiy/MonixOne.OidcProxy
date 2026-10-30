@@ -18,14 +18,42 @@ The cookie bridge uses `__Host-Http-` cookies with `Path=/` and no Domain, preve
 sibling-domain cookie tossing. Original backend paths are enforced during forwarding.
 Old `__Secure-` bridge cookies are ignored; restart pending OAuth connections after upgrading all replicas.
 
-For a private gateway behind a controlled edge proxy or routing mesh, opt in to
-`ForwardedHeaders:TrustAllProxies=true` to process one forwarded hop without
-listing changing proxy IPs or subnets. The package owns this policy and middleware;
-do not add another `UseForwardedHeaders` or host `PostConfigure` block.
-Strict `KnownProxies` / `KnownIPNetworks` checks remain the default when the flag
-is absent or false. The opt-in requires preventing direct untrusted access to the
-gateway: a direct sender can otherwise spoof the forwarded client IP.
-`AllowedHosts`, BFF origin checks, CORS, CSRF and authentication remain enforced.
+## Forwarded headers behind a private ingress
+
+The package configures and invokes ASP.NET Core forwarded headers middleware once,
+before routing and the host callback containing observability and rate limiting.
+It restores `HttpContext.Connection.RemoteIpAddress`, `Request.Scheme` and
+`Request.Host`. Do not add host `Configure/PostConfigure<ForwardedHeadersOptions>`
+or another `UseForwardedHeaders()` call. A separate Identity provider owns its own
+HTTP pipeline and does not need this BFF package just to process forwarded headers.
+
+For a private gateway behind a controlled edge proxy or routing mesh, add this
+fragment to the configuration of the intended environment:
+
+```json
+{
+  "ForwardedHeaders": {
+    "TrustAllProxies": true,
+    "AllowedHosts": ["gw.example.com", "spa.example.com"]
+  }
+}
+```
+
+This opt-in clears `KnownProxies` and `KnownIPNetworks` and sets `ForwardLimit=1`.
+The rightmost `X-Forwarded-For` value becomes `RemoteIpAddress`; application code
+should use that property instead of parsing the first header value. The edge must
+replace untrusted forwarded headers or append its observed peer IP last, and set
+the public scheme and host. The resulting IP is the address asserted by the edge;
+if another load balancer precedes it, establish that trust at the edge first.
+
+Prevent direct untrusted access to the gateway: a direct sender can otherwise
+spoof forwarded IP, scheme and host (within `AllowedHosts`). No Swarm IP/subnet
+list or changes to ingress publication, replica count or `start-first` are needed.
+The flag is not tied to an environment name. When absent or false, strict
+`KnownProxies` / `KnownIPNetworks` checks remain the default. `AllowedHosts`, BFF
+origin checks, CORS, CSRF and authentication remain enforced in either mode.
+
+See [ASP.NET Core proxy configuration](https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/proxy-load-balancer?view=aspnetcore-10.0).
 
 Configure confidential clients, exact HTTPS callbacks and a trusted proxy boundary.
 Supply Redis, `Bff__EncryptionKey` and client secrets through a secret provider.

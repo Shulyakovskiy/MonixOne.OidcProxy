@@ -741,18 +741,74 @@ export default function Documentation() {
                   <strong>{pipeline[middleware]![0]}</strong>
                   <p>{pipeline[middleware]![1]}</p>
                 </div>
-                <p className="doc-hint">
-                  Forwarded headers включают XForwardedFor | XForwardedProto |
-                  XForwardedHost. В GW этот блок не дублируется.
+              </section>
+              <section className="doc-block">
+                <h2>GW за балансировщиком: IP и HTTPS</h2>
+                <p>
+                  Пакет один раз настраивает и вызывает стандартный ASP.NET Core
+                  middleware для X-Forwarded-For, X-Forwarded-Proto и
+                  X-Forwarded-Host. RemoteIpAddress, схема и host восстанавливаются
+                  до routing и callback GW с observability, CORS и rate limiting.
+                  Повторные Configure/PostConfigure для ForwardedHeadersOptions
+                  и UseForwardedHeaders в GW не нужны.
+                </p>
+                <Code
+                  label="appsettings — закрытый GW за ingress"
+                  value={`{
+  "ForwardedHeaders": {
+    "TrustAllProxies": true,
+    "AllowedHosts": ["gw.example.com", "spa.example.com"]
+  }
+}`}
+                />
+                <p>
+                  Это фрагмент конфигурации выбранного закрытого окружения.
+                  TrustAllProxies не проверяет имя окружения: его нужно включить
+                  явно. Опция очищает KnownProxies и KnownIPNetworks, сохраняя
+                  ForwardLimit=1. Списки адресов и подсетей Swarm не нужны;
+                  публикация через ingress, реплики и start-first сохраняются.
+                  При false или отсутствии опции действует строгий режим.
+                </p>
+                <h3>Какой IP получает приложение</h3>
+                <p>
+                  Middleware берёт одно последнее значение X-Forwarded-For.
+                  Например, для 203.0.113.66, 198.51.100.10 результатом будет
+                  RemoteIpAddress=198.51.100.10. Это адрес, подтверждённый edge,
+                  а не IP контейнера ingress. Rate limiter и прикладной код должны
+                  читать HttpContext.Connection.RemoteIpAddress, не разбирать
+                  первое значение заголовка. YARP передаёт нормализованный адрес
+                  backend-сервису.
+                </p>
+                <p>
+                  Шлюз должен перезаписывать недоверенные forwarded-заголовки
+                  либо добавлять наблюдаемый адрес последним в X-Forwarded-For,
+                  задавая публичные Proto и Host. В Nginx $proxy_add_x_forwarded_for
+                  добавляет $remote_addr последним; вариант X-Forwarded-For
+                  $remote_addr заменяет входящий список. Если перед Nginx стоит
+                  ещё один балансировщик, доверие к исходному IP настраивается
+                  на этом edge: пакет не определяет адрес за ним автоматически.
+                </p>
+                <div className="doc-notice">
+                  Прямой недоверенный доступ к GW должен быть исключён. Иначе
+                  отправитель сможет подменить forwarded IP, схему и host в
+                  пределах AllowedHosts. Опция снимает только проверку IP proxy;
+                  AllowedHosts, BFF origin checks, CORS, CSRF и аутентификация
+                  остаются включёнными.
+                </div>
+                <p>
+                  Identity — отдельный сервер авторизации со своим HTTP pipeline.
+                  Его обработка forwarded headers не дублирует GW; подключать
+                  BFF-пакет только ради неё не нужно.
                 </p>
                 <p className="doc-hint">
-                  Для закрытого GW за контролируемым шлюзом можно включить
-                  ForwardedHeaders:TrustAllProxies=true. Пакет принимает один
-                  последний forwarded hop без списка IP или подсетей ingress.
-                  По умолчанию проверяются KnownProxies и KnownIPNetworks.
-                  Прямой недоверенный доступ к GW при ослабленной проверке нужно
-                  исключить: такой отправитель сможет подменить client IP.
-                  AllowedHosts, CORS, CSRF и аутентификация остаются включёнными.
+                  Подробности:{" "}
+                  <a href="https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/proxy-load-balancer?view=aspnetcore-10.0">
+                    ASP.NET Core proxy configuration
+                  </a>
+                  {" · "}
+                  <a href="https://nginx.org/en/docs/http/ngx_http_proxy_module.html#var_proxy_add_x_forwarded_for">
+                    Nginx forwarded-for
+                  </a>
                 </p>
               </section>
             </>

@@ -20,6 +20,25 @@ Cookie bridge использует `__Host-Http-`, `Path=/`, Secure/HttpOnly и 
 Backend Path проверяется сервером. Настройки GW менять не нужно; после обновления всех
 реплик незавершённое внешнее OAuth-подключение следует начать заново.
 
+## GW за балансировщиком или Swarm ingress
+
+Обработку `X-Forwarded-For/Proto/Host` регистрирует пакет. В GW достаточно
+`AddOidcProxy(configuration)` и `UseOidcProxy(pipeline => …)`; повторные
+`Configure/PostConfigure<ForwardedHeadersOptions>` и `UseForwardedHeaders()` не нужны.
+Пакет восстанавливает `RemoteIpAddress`, HTTPS-схему и host до callback с rate limiting.
+
+Для закрытого GW за доверенным шлюзом доступна опция
+`ForwardedHeaders:TrustAllProxies=true`: она убирает проверку IP непосредственного
+proxy и обрабатывает один последний hop (`ForwardLimit=1`) без привязки к подсетям
+Swarm. Прямой недоверенный доступ к GW должен быть исключён. Без опции действует
+строгий режим `KnownProxies` / `KnownIPNetworks`; `AllowedHosts`, CORS, CSRF и
+аутентификация сохраняются в обоих режимах. Публикацию через ingress, реплики и
+`start-first` менять не требуется.
+
+Пример конфигурации, выбор исходного IP и граница ответственности GW/Identity —
+в разделе «Как работает → GW за балансировщиком: IP и HTTPS»
+[интерактивного справочника](docs/index.html#flow).
+
 ## Единый интерактивный справочник
 
 Откройте [docs/index.html](docs/index.html) в браузере. При просмотре на GitHub скачайте
