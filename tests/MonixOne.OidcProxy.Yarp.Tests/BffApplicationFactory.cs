@@ -4,6 +4,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.WebUtilities;
@@ -45,6 +46,13 @@ public sealed class BffApplicationFactory(
     public Action<List<ClusterConfig>>? ConfigureClusters { get; set; }
     public Action<List<RouteConfig>>? ConfigureRoutes { get; set; }
     public Dictionary<string, string?> ConfigurationValues { get; } = [];
+    internal IDataProtector SessionProtector =>
+        Services
+            .GetRequiredService<IDataProtectionProvider>()
+            .CreateProtector(
+                "MonixOne.OidcProxy.Yarp.ServerSession",
+                "test-spa:testing:" + KeyNamespace + ":spa:"
+            );
     private readonly List<(
         string Name,
         Uri Origin,
@@ -300,8 +308,8 @@ internal static class BrowserRequests
     )
     {
         var path = pathBase + OidcProxyRoutes.Login;
-        if (rememberMe is { } remembered)
-            path = QueryHelpers.AddQueryString(path, "rememberMe", remembered ? "true" : "false");
+        if (rememberMe.HasValue)
+            path = QueryHelpers.AddQueryString(path, "rememberMe", rememberMe.Value.ToString());
         if (returnUrl is not null)
             path = QueryHelpers.AddQueryString(path, "returnUrl", returnUrl);
         var start = await browser.GetAsync(

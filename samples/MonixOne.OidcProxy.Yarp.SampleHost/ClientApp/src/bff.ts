@@ -38,7 +38,7 @@ export async function readSession(
   signal?: AbortSignal,
 ): Promise<Claims | null> {
   try {
-    const claims = await bffGet<unknown>(routes.user, signal);
+    const claims = await bffGet<unknown>(routes.user + "?slide=false", signal);
     if (
       typeof claims !== "object" ||
       claims === null ||

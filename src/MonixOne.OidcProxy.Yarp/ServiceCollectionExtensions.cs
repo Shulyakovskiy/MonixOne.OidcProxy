@@ -2,6 +2,7 @@ using System.Net;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -101,7 +102,6 @@ public static class ServiceCollectionExtensions
             {
                 options.KnownProxies.Clear();
                 options.KnownIPNetworks.Clear();
-                options.ForwardLimit = 1;
             }
             else
             {
@@ -207,11 +207,9 @@ public static class ServiceCollectionExtensions
                     && ProxyOptions.IsKeySegment(o.KeyNamespace),
                 "ApplicationName, EnvironmentName and KeyNamespace require 1-64 ASCII letters, digits, dots, underscores or hyphens."
             )
-            .Validate(
-                o => !string.IsNullOrWhiteSpace(o.EncryptionKey),
-                "Bff:EncryptionKey is required and must contain a strong random secret."
-            )
             .ValidateOnStart();
+        services.AddMetrics();
+        services.AddSingleton<BffTelemetry>();
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<ITransformProvider, GatewayTraceTransformProvider>()
         );
@@ -282,6 +280,21 @@ public static class ServiceCollectionExtensions
             .AddOptions<OidcProxyClientOptions>(name)
             .Configure(configureClient)
             .Validate(
+                o =>
+                    OidcProxyClientOptions.IsValidTimeout(o.RefreshTimeout)
+                    && OidcProxyClientOptions.IsValidTimeout(o.SessionStoreTimeout)
+                    && OidcProxyClientOptions.IsValidTimeout(o.TokenRevocationTimeout),
+                "RefreshTimeout, SessionStoreTimeout and TokenRevocationTimeout must be positive finite framework timer durations."
+            )
+            .Validate(
+                o => Enum.IsDefined(o.ClientCredentialStyle),
+                "ClientCredentialStyle must be PostBody or AuthorizationHeader."
+            )
+            .Validate(
+                o => o.BackchannelLogout is { IsValid: true },
+                "BackchannelLogout requires positive size/time/batch limits and ReplayRetention greater than MaximumTokenAge plus ClockSkew."
+            )
+            .Validate(
                 o => o.HasValidOrigin,
                 "PublicOrigin must be an HTTPS origin without path, credentials, query or fragment."
             )
@@ -326,9 +339,10 @@ public static class ServiceCollectionExtensions
                 new SessionStore(
                     sp.GetRequiredService<BffClients>().ByName[name],
                     sp.GetRequiredService<ConnectionMultiplexer>(),
-                    sp.GetRequiredService<IOptions<ProxyOptions>>(),
+                    sp.GetRequiredService<IDataProtectionProvider>(),
                     sp.GetRequiredService<TimeProvider>(),
-                    sp.GetRequiredService<IHostApplicationLifetime>()
+                    sp.GetRequiredService<IHostApplicationLifetime>(),
+                    sp.GetRequiredService<BffTelemetry>()
                 )
         );
         services.AddKeyedSingleton<TokenSession>(
@@ -340,7 +354,8 @@ public static class ServiceCollectionExtensions
                     sp.GetRequiredService<IOptionsMonitor<OpenIdConnectOptions>>(),
                     sp.GetRequiredService<TimeProvider>(),
                     sp.GetRequiredService<IHostApplicationLifetime>(),
-                    sp.GetRequiredService<ILogger<TokenSession>>()
+                    sp.GetRequiredService<ILogger<TokenSession>>(),
+                    sp.GetRequiredService<BffTelemetry>()
                 )
         );
         OidcAuthentication.Register(services, name, configureOidc);

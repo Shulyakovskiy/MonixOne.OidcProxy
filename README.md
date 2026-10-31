@@ -9,7 +9,7 @@ Native API, их JWT policies и балансировка работают в т
 Обычный вход выдаёт сессионную cookie и сохраняет прежние idle/absolute лимиты.
 Для явного «Запомнить» SPA передаёт `rememberMe=true` в `/.auth/login` вместе с
 локальным `returnUrl`. Стандартный защищённый OIDC state сохраняет выбор до callback.
-Постоянная cookie и зашифрованная Redis-сессия действуют максимум 30 дней без
+Постоянная cookie и зашифрованная Redis-сессия по умолчанию действуют 30 дней без
 более короткого idle-лимита; refresh и активность этот срок не продлевают.
 Срок настраивается через `Bff:Clients:<client>:RememberedSessionTimeout`.
 Logout, отзыв доступа и истечение refresh token могут завершить вход раньше.
@@ -25,8 +25,67 @@ app.UseOidcProxy();
 без профилей SPA сохраняет native pipeline.
 
 Cookie bridge использует `__Host-Http-`, `Path=/`, Secure/HttpOnly и отсутствие Domain.
-Backend Path проверяется сервером. Настройки GW менять не нужно; после обновления всех
-реплик незавершённое внешнее OAuth-подключение следует начать заново.
+Backend Path проверяется сервером. Дополнительная конфигурация GW для cookie bridge
+не требуется.
+
+Сессии защищает ASP.NET Core Data Protection с общим зашифрованным key ring в Redis.
+Framework управляет ротацией ключей данных. `Bff:EncryptionKey` защищает key ring;
+host может вместо него использовать стандартные `ProtectKeysWithCertificate` и
+`UnprotectKeysWithAnyCertificate`. Все реплики должны читать один key ring и иметь
+доступ к ключам его расшифрования. Формат предназначен для нового внедрения; миграторов нет.
+
+IdP может закрыть сессии подписанным POST на `/.auth/backchannel-logout` с учётом
+`PathBase`. Зарегистрируйте этот URL у провайдера, поддерживающего OIDC Back-Channel
+Logout. Проверяются issuer/audience/signature, время, событие и `sid`/`sub`.
+Повторная доставка идемпотентна; незавершённое удаление возвращает 503 и допускает
+повтор. Размеры, сроки, replay retention и размеры пакетов задаются в
+`Bff:Clients:<name>:BackchannelLogout`; свойства описаны в `BackchannelLogoutOptions`.
+
+`/.auth/me?slide=false` проверяет сессию без продления idle и refresh; прежний запрос
+без параметра сохраняет поведение. Sample использует проверку без продления.
+Обычная сессия ограничена `SessionIdleTimeout` и `SessionAbsoluteTimeout`.
+Явный `/.auth/login?rememberMe=true` создаёт persistent cookie и сессию с фиксированным
+`RememberedSessionTimeout` (по умолчанию 30 дней); activity и refresh срок не продлевают.
+`ClientCredentialStyle` клиента выбирает `PostBody` или `AuthorizationHeader`
+одновременно для PAR, code exchange, refresh и revocation. Настраивайте OIDC через
+`Events`; `EventsType` отклоняется, чтобы обязательная обработка BFF сохранялась.
+Бюджеты клиента задаются через `RefreshTimeout`, `SessionStoreTimeout` и
+`TokenRevocationTimeout`; HTTP timeout IdP — через стандартный
+`OpenIdConnect:BackchannelTimeout`. Все сроки проверяются при старте.
+
+Для OpenTelemetry host подписывается на Meter и ActivitySource
+`MonixOne.OidcProxy.Yarp` (`OidcProxyDefaults.TelemetryName`). Метрики отражают
+создание/подтверждённое удаление сессий, CAS conflicts, исходы и длительность refresh,
+ожидание, недоступность сессий и ошибки revocation. Истечение Redis TTL не считается
+наблюдаемым удалением. Экспорт и health checks остаются ответственностью host.
+
+CAS предполагает сохранность подтверждённых записей Redis. Асинхронный failover
+или восстановление старого backup может потерять refresh/logout; при потере
+состояния эксплуатационная процедура должна закрыть прежнюю область сессий и
+отозвать соответствующие grants у IdP. Уже отправленные API-запросы logout не отменяет.
+Для атомарного logout ключи одного BFF-клиента используют общий hash slot Redis Cluster;
+распределение между shard выполняется по client scope.
+
+## Результат обзора Duende
+
+Изучен [Duende products, commit 222118c7](https://github.com/DuendeSoftware/products/tree/222118c7a0563a3cb4727fae5233f7ee98676e40)
+и актуальная основная ветка этой библиотеки с remembered sessions 8.2.0.
+Реализованы практики, применимые к текущей архитектуре:
+
+| Рекомендация | Реализация 9.0.0 |
+| --- | --- |
+| Серверные токены и штатная ротация ключей | ASP.NET Core Data Protection; общий encrypted key ring в Redis; штатная защита сертификатом поддерживается |
+| Централизованное завершение сессий от IdP | Подписанный OIDC Back-Channel Logout; индексы по issuer/sub/sid; bounded atomic batches и replay marker |
+| Проверка сессии без фонового продления | `/.auth/me?slide=false`; sample и BR.Admin-Identity используют этот режим |
+| Единый способ аутентификации confidential client | Существующий IdentityModel для `client_secret_post` / `client_secret_basic` во всех grant endpoints, включая PAR |
+| Безопасные точки расширения OIDC | Штатные events с обязательным BFF lifecycle и cleanup; credentials остаются на сервере |
+| Эксплуатационная наблюдаемость | Штатные Meter/ActivitySource; таймауты, лимиты и failure semantics описаны в конфигурации |
+
+Сохранены YARP, Redis CAS, cookie/CSRF contracts, native API и разделение SPA/шлюза.
+Новых инфраструктурных сервисов или зависимостей не добавлено. Формат сессий рассчитан
+на новое внедрение, без миграций. Код Duende не переносился: использованы стандартные
+протоколы и уже подключённые framework/library механизмы. Подключение уведомлений IdP,
+хранение сертификатов, экспорт telemetry и проверка failover Redis принадлежат окружению.
 
 ## GW за балансировщиком или Swarm ingress
 
@@ -53,9 +112,10 @@ Swarm. Прямой недоверенный доступ к GW должен б�
 этот файл и откройте локально. Всё включено в один HTML: сервер, Node и запущенные сервисы не нужны.
 
 - **Подключение:** генератор appsettings, код GW, callbacks, секреты, шаблоны Admin Local/Dev и несколько SPA.
+- **Все настройки:** полный appsettings.json с описанием каждого параметра, единиц и ограничений.
 - **Как работает:** интерактивная архитектура, вход, API, refresh, Calendar, logout и порядок middleware.
 - **Маршруты:** BFF/native API, PathBase и симулятор решений GW.
-- **Сессии и cookies:** Redis, реплики, отказы, миграция и cookie bridge.
+- **Сессии и cookies:** Redis, реплики, отказы, ротация ключей и cookie bridge.
 - **Проверка и ошибки:** самодостаточные тесты, локальный запуск, CI и диагностика.
 
 Исходник справочника — React в [ClientApp](samples/MonixOne.OidcProxy.Yarp.SampleHost/ClientApp/src/Documentation.tsx).

@@ -1,3 +1,5 @@
+using Duende.IdentityModel.Client;
+
 namespace MonixOne.OidcProxy.Yarp;
 
 /// <summary>
@@ -6,6 +8,25 @@ namespace MonixOne.OidcProxy.Yarp;
 /// </summary>
 public sealed class OidcProxyClientOptions
 {
+    /// <summary>
+    /// Maximum finite duration supported by CancellationTokenSource timers.
+    /// </summary>
+    private static readonly TimeSpan MaximumTimerTimeout = TimeSpan.FromMilliseconds(
+        uint.MaxValue - 1L
+    );
+
+    /// <summary>
+    /// Validated size, time and batch limits for signed provider logout notifications.
+    /// </summary>
+    public BackchannelLogoutOptions BackchannelLogout { get; set; } = new();
+
+    /// <summary>
+    /// Sends the confidential client secret in the POST body or HTTP Basic header.
+    /// The same style is used for PAR, code redemption, refresh and revocation.
+    /// </summary>
+    public ClientCredentialStyle ClientCredentialStyle { get; set; } =
+        ClientCredentialStyle.PostBody;
+
     /// <summary>
     /// The exact public HTTPS origin shared by this SPA and its BFF endpoints.
     /// </summary>
@@ -63,7 +84,25 @@ public sealed class OidcProxyClientOptions
     public Dictionary<string, OidcProxyCookiePolicy> CookiePolicies { get; set; } =
         new(StringComparer.Ordinal);
 
-    internal TimeSpan RefreshTimeout => TimeSpan.FromSeconds(30);
+    /// <summary>
+    /// Server-owned refresh budget and pending-operation lifetime across replicas.
+    /// Keep the same value on replicas sharing a client session namespace.
+    /// </summary>
+    public TimeSpan RefreshTimeout { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Server-owned budget for session creation and logout/failed-login cleanup.
+    /// </summary>
+    public TimeSpan SessionStoreTimeout { get; set; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Maximum duration of best-effort refresh-token revocation at the provider.
+    /// </summary>
+    public TimeSpan TokenRevocationTimeout { get; set; } = TimeSpan.FromSeconds(5);
+
+    internal static bool IsValidTimeout(TimeSpan value) =>
+        value > TimeSpan.Zero && value <= MaximumTimerTimeout;
+
     internal bool HasValidOrigin =>
         PublicOrigin is { IsAbsoluteUri: true, Scheme: "https", AbsolutePath: "/" } origin
         && origin.UserInfo.Length == 0

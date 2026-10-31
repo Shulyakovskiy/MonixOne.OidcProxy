@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Globalization;
 using System.Security.Claims;
 using System.Security.Cryptography;
@@ -21,7 +22,8 @@ internal sealed class TokenSession(
     IOptionsMonitor<OpenIdConnectOptions> oidcOptions,
     TimeProvider timeProvider,
     IHostApplicationLifetime applicationLifetime,
-    ILogger<TokenSession> logger
+    ILogger<TokenSession> logger,
+    BffTelemetry telemetry
 )
 {
     private const int MaxStateAttempts = 4096;
@@ -37,7 +39,8 @@ internal sealed class TokenSession(
     internal async Task<AuthenticationTicket?> GetActiveTicketAsync(
         string id,
         CancellationToken cancellationToken,
-        SessionSnapshot? initial = null
+        SessionSnapshot? initial = null,
+        bool renewSession = true
     )
     {
         var activityAt = timeProvider.GetUtcNow();
@@ -50,23 +53,30 @@ internal sealed class TokenSession(
                 return null;
             var now = timeProvider.GetUtcNow();
             var reused = ReferenceEquals(snapshot, initial);
-            if (snapshot.State.AbsoluteExpiresAt <= now || snapshot.State.IdleExpiresAt <= now)
+            if (
+                snapshot.State.AbsoluteExpiresAt <= now
+                || snapshot.State.IdleExpiresAt <= now
+                || snapshot.State.RefreshOperation is not null
+                    && snapshot.State.RefreshDeadline <= now
+            )
             {
                 if (await store.CompareExchangeAsync(snapshot, null, cancellationToken))
                     return null;
                 snapshot = null;
                 continue;
             }
+            if (!renewSession)
+            {
+                // Session inspection neither touches idle expiry nor redeems credentials.
+                // CAS still verifies that authentication did not race a logout/update.
+                if (await store.CompareExchangeAsync(snapshot, snapshot.State, cancellationToken))
+                    return snapshot.State.ReadTicket();
+                snapshot = null;
+                continue;
+            }
             if (snapshot.State.RefreshOperation is not null)
             {
-                if (snapshot.State.RefreshDeadline <= now)
-                {
-                    // Expiry must still work while a local owner is awaiting IdP.
-                    // An ambiguous rotating credential is never redeemed again.
-                    if (await store.CompareExchangeAsync(snapshot, null, cancellationToken))
-                        return null;
-                }
-                else if (
+                if (
                     await TouchAsync(
                         snapshot,
                         activityAt,
@@ -156,7 +166,15 @@ internal sealed class TokenSession(
             snapshot.Id,
             _ => new Lazy<Task>(() => CoordinateRefreshAsync(snapshot))
         );
-        await operation.Value.WaitAsync(ct);
+        var started = Stopwatch.GetTimestamp();
+        try
+        {
+            await operation.Value.WaitAsync(ct);
+        }
+        finally
+        {
+            telemetry.RefreshWaited(client.Name, started);
+        }
     }
 
     private async Task CoordinateRefreshAsync(SessionSnapshot initial)
@@ -234,6 +252,8 @@ internal sealed class TokenSession(
                     continue;
                 }
 
+                using var activity = telemetry.StartRefresh(client.Name);
+                var started = Stopwatch.GetTimestamp();
                 AuthenticationTicket updated;
                 try
                 {
@@ -241,6 +261,14 @@ internal sealed class TokenSession(
                 }
                 catch (Exception e)
                 {
+                    activity?.SetStatus(ActivityStatusCode.Error);
+                    telemetry.RefreshCompleted(
+                        client.Name,
+                        e is ReauthenticationRequiredException
+                            ? "reauthentication_required"
+                            : "provider_failure",
+                        started
+                    );
                     await InvalidateAsync(initial.Id);
                     await RevokeAsync(ticket, CancellationToken.None);
                     logger.LogWarning(
@@ -254,7 +282,21 @@ internal sealed class TokenSession(
                         e
                     );
                 }
-                await CompleteRefreshAsync(initial.Id, operation, updated, ct);
+                try
+                {
+                    var committed = await CompleteRefreshAsync(initial.Id, operation, updated, ct);
+                    telemetry.RefreshCompleted(
+                        client.Name,
+                        committed ? "success" : "session_removed",
+                        started
+                    );
+                }
+                catch
+                {
+                    activity?.SetStatus(ActivityStatusCode.Error);
+                    telemetry.RefreshCompleted(client.Name, "persistence_failure", started);
+                    throw;
+                }
                 return;
             }
             throw new SessionUnavailableException(
@@ -274,7 +316,7 @@ internal sealed class TokenSession(
         }
     }
 
-    private async Task CompleteRefreshAsync(
+    private async Task<bool> CompleteRefreshAsync(
         string id,
         string operation,
         AuthenticationTicket updated,
@@ -293,7 +335,7 @@ internal sealed class TokenSession(
                 )
                 {
                     await RevokeAsync(updated, CancellationToken.None);
-                    return;
+                    return false;
                 }
                 var now = timeProvider.GetUtcNow();
                 var completed = latest.State with
@@ -312,7 +354,7 @@ internal sealed class TokenSession(
                     ),
                 };
                 if (await store.CompareExchangeAsync(latest, completed, ct))
-                    return;
+                    return true;
             }
             throw new SessionUnavailableException(
                 "Session changed repeatedly while completing refresh."
@@ -370,7 +412,7 @@ internal sealed class TokenSession(
                 Address = configuration.TokenEndpoint!,
                 ClientId = oidc.ClientId!,
                 ClientSecret = oidc.ClientSecret,
-                ClientCredentialStyle = ClientCredentialStyle.PostBody,
+                ClientCredentialStyle = client.Options.ClientCredentialStyle,
                 RefreshToken = refreshToken,
             },
             ct
@@ -515,7 +557,7 @@ internal sealed class TokenSession(
 
     private async Task InvalidateAsync(string id)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var timeout = new CancellationTokenSource(client.Options.SessionStoreTimeout);
         try
         {
             // Session IDs are never reused. Delete directly: a failed read must not
@@ -542,7 +584,7 @@ internal sealed class TokenSession(
         if (string.IsNullOrEmpty(token))
             return;
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(5));
+        timeout.CancelAfter(client.Options.TokenRevocationTimeout);
         try
         {
             var oidc = oidcOptions.Get(client.OpenIdConnectScheme);
@@ -558,17 +600,21 @@ internal sealed class TokenSession(
                     Address = endpoint,
                     ClientId = oidc.ClientId!,
                     ClientSecret = oidc.ClientSecret,
-                    ClientCredentialStyle = ClientCredentialStyle.PostBody,
+                    ClientCredentialStyle = client.Options.ClientCredentialStyle,
                     Token = token,
                     TokenTypeHint = "refresh_token",
                 },
                 timeout.Token
             );
             if (response.IsError)
+            {
+                telemetry.RevocationFailed(client.Name);
                 logger.LogWarning("Identity provider rejected best-effort BFF token revocation.");
+            }
         }
         catch (Exception e)
         {
+            telemetry.RevocationFailed(client.Name);
             logger.LogWarning(
                 "Best-effort BFF token revocation failed. Failure type: {FailureType}",
                 e.GetType().Name

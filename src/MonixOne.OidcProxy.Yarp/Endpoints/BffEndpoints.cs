@@ -25,6 +25,12 @@ internal static class BffEndpoints
             .RequireHost(options.PublicOrigin!.Authority)
             .WithMetadata(client);
         routes
+            .MapPost(
+                OidcProxyRoutes.BackchannelLogout,
+                (Delegate)((HttpContext context) => BackchannelLogout.ProcessAsync(context, client))
+            )
+            .AllowAnonymous();
+        routes
             .MapGet(
                 OidcProxyRoutes.Login,
                 async (HttpContext context) =>
@@ -109,7 +115,7 @@ internal static class BffEndpoints
                     // Once logout is authorized, a browser disconnect must not interrupt
                     // its local invalidation. GETDEL returns the tokens current at deletion,
                     // including a refresh that committed after authentication of this request.
-                    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                    using var timeout = new CancellationTokenSource(options.SessionStoreTimeout);
                     var store = context.RequestServices.GetRequiredKeyedService<SessionStore>(
                         client.Name
                     );

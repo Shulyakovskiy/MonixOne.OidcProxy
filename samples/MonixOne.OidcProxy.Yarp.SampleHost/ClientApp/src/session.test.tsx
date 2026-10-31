@@ -19,7 +19,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("renews only a visible session and stops polling after a 401", async () => {
+it("inspects only a visible session and stops polling after a 401", async () => {
   // Arrange
   vi.mocked(fetch)
     .mockResolvedValueOnce(new Response(JSON.stringify({ sub: ["user-1"] })))

@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using MonixOne.OidcProxy.Yarp.Endpoints;
 using MonixOne.OidcProxy.Yarp.Security;
+using MonixOne.OidcProxy.Yarp.Sessions;
 using StackExchange.Redis;
 
 namespace MonixOne.OidcProxy.Yarp;
@@ -72,6 +73,33 @@ public static class ApplicationBuilderExtensions
             });
         app.UseRouting();
         configureBeforeAuthentication?.Invoke(app);
+        if (clients is not null)
+            app.Use(
+                async (context, next) =>
+                {
+                    try
+                    {
+                        await next(context);
+                    }
+                    finally
+                    {
+                        // Host events may handle/skip the response at any OIDC stage.
+                        // TicketReceived and RemoteFailure normally take ownership;
+                        // clean up credentials still owned by an abandoned attempt.
+                        if (
+                            context.Items.Remove(
+                                BffConstants.SignInRefreshTokenItem,
+                                out var issued
+                            )
+                            && issued is string refreshToken
+                            && clients.Find(context.Request) is { } client
+                        )
+                            await context
+                                .RequestServices.GetRequiredKeyedService<TokenSession>(client.Name)
+                                .RevokeAsync(refreshToken, CancellationToken.None);
+                    }
+                }
+            );
         app.UseAuthentication();
         if (clients is not null)
             app.UseMiddleware<BffRequestMiddleware>();

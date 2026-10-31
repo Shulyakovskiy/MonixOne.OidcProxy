@@ -24,7 +24,6 @@ forwarded headers and shared Redis registration. Exact native YARP hosts select 
 clients; `ForwardCookies` enables isolated backend cookies without provider-specific lists.
 The cookie bridge uses `__Host-Http-` cookies with `Path=/` and no Domain, preventing
 sibling-domain cookie tossing. Original backend paths are enforced during forwarding.
-Old `__Secure-` bridge cookies are ignored; restart pending OAuth connections after upgrading all replicas.
 
 ## Forwarded headers behind a private ingress
 
@@ -47,7 +46,7 @@ fragment to the configuration of the intended environment:
 }
 ```
 
-This opt-in clears `KnownProxies` and `KnownIPNetworks` and sets `ForwardLimit=1`.
+This opt-in clears `KnownProxies` and `KnownIPNetworks`, retaining the framework's default `ForwardLimit=1`.
 The rightmost `X-Forwarded-For` value becomes `RemoteIpAddress`; application code
 should use that property instead of parsing the first header value. The edge must
 replace untrusted forwarded headers or append its observed peer IP last, and set
@@ -64,11 +63,23 @@ origin checks, CORS, CSRF and authentication remain enforced in either mode.
 See [ASP.NET Core proxy configuration](https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/proxy-load-balancer?view=aspnetcore-10.0).
 
 Configure confidential clients, exact HTTPS callbacks and a trusted proxy boundary.
-Supply Redis, `Bff__EncryptionKey` and client secrets through a secret provider.
-Keep the Redis scope and encryption key consistent across replicas and restarts.
+Supply Redis and client secrets through a secret provider. Protect the shared key
+ring with `Bff__EncryptionKey` or the host's standard certificate configuration.
+Keep the Redis scope and key-ring decryption configuration consistent across replicas and restarts.
+
+ASP.NET Core Data Protection encrypts sessions and manages data-key rotation in the
+shared Redis key ring. Hosts can use standard certificate key protection instead
+of the password wrapper. This format targets a new deployment; no migration reader is included.
+Signed OIDC back-channel logout is available at `/.auth/backchannel-logout`.
+Configure its limits through each client's `BackchannelLogout` options.
+Use `/.auth/me?slide=false` to inspect a session without renewing idle expiry.
+`ClientCredentialStyle` selects POST-body or Basic authentication consistently for
+PAR, code exchange, refresh and revocation. OIDC `Events` callbacks are composed;
+`EventsType` is not supported. Collect the `MonixOne.OidcProxy.Yarp` Meter and
+ActivitySource with the host's telemetry stack.
 
 [Interactive setup guide](https://github.com/Shulyakovskiy/MonixOne.OidcProxy.Yarp#readme):
-configuration generator, middleware/flow diagrams, route simulator, sessions, migration and testing.
+configuration generator, middleware/flow diagrams, route simulator, sessions and testing.
 Download `docs/index.html` from the repository to use the guide offline as a single file.
 
 Based on [OidcProxy.Net](https://github.com/oidcproxydotnet/OidcProxy.Net).

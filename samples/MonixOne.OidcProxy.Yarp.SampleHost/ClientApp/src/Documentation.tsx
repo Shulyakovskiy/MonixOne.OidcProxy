@@ -22,8 +22,11 @@ import { Architecture, Sequence } from "./DocumentationDiagram";
 import { createRoutes } from "./routes";
 import "./documentation.css";
 
+const completeAppsettings = import.meta.env.VITE_DOCUMENTED_APPSETTINGS as string;
+
 const sections = [
   ["setup", "Подключение", "Конфигурация и код"],
+  ["settings", "Все настройки", "appsettings.json с описаниями"],
   ["flow", "Как работает", "Схемы и порядок middleware"],
   ["routes", "Маршруты", "BFF и native API"],
   ["sessions", "Сессии и cookies", "Redis, реплики, refresh"],
@@ -276,6 +279,8 @@ export default function Documentation() {
             <p>
               {section === "setup"
                 ? "Минимальные изменения в GW. Конфигурация, callbacks и код — в одном месте."
+                : section === "settings"
+                  ? "Полный appsettings.json: назначение каждого параметра, границы конфигурации и серверные секреты."
                 : section === "flow"
                   ? "Выберите компонент или этап. Схема показывает, где проходят запросы, cookies и токены."
                   : section === "routes"
@@ -637,6 +642,51 @@ export default function Documentation() {
             </>
           )}
 
+          {section === "settings" && (
+            <>
+              <section className="doc-block">
+                <h2>Полный appsettings.json</h2>
+                <p>
+                  Пример для нового внедрения BR.Admin-Identity. Каждый параметр
+                  снабжён комментарием: назначение, единицы и ограничения.
+                  ASP.NET Core поддерживает комментарии в appsettings.json.
+                  Замените адреса, scopes и доверенные proxy для своего окружения.
+                </p>
+                <Code label="appsettings.json — все настройки с описаниями" value={completeAppsettings} />
+              </section>
+              <section className="doc-block">
+                <h2>Секреты и окружение</h2>
+                <p>
+                  Пустые EncryptionKey, ClientSecret и строка Redis заполняются
+                  через secret provider или environment с разделителем __.
+                  EnvironmentName берётся из IHostEnvironment. Конфигурация BFF
+                  фиксируется при запуске; изменения сроков, клиентов и секретов
+                  применяются согласованным перезапуском реплик.
+                </p>
+                <Code label="Имена серверных переменных" value={`ASPNETCORE_ENVIRONMENT\nConnectionStrings__Redis\nBff__EncryptionKey\nBff__Clients__adminidentity__OpenIdConnect__ClientSecret`} />
+              </section>
+              <section className="doc-block">
+                <h2>Стандартные настройки host</h2>
+                <p>
+                  Срок ключей Data Protection задаётся штатным SetDefaultKeyLifetime.
+                  ProtectKeysWithCertificate и UnprotectKeysWithAnyCertificate
+                  управляют сертификатами защиты key ring; EncryptionKey тогда не нужен.
+                  Эти API подключает host: несуществующих JSON-параметров пакета для них нет.
+                  Настройки exporters OpenTelemetry, health checks, rate limiting,
+                  native JWT policies и дополнительного middleware также принадлежат host.
+                </p>
+                <p>
+                  ReverseProxy использует полный штатный контракт YARP. В примере
+                  показаны маршруты и destinations; дополнительные transport,
+                  load balancing и health-check параметры остаются настройками YARP.
+                  OpenIdConnect использует стандартные OpenIdConnectOptions;
+                  фиксированные требования BFF перечислены в комментариях примера.
+                  Новое хранение сессий не содержит читателя или мигратора формата 8.x.
+                </p>
+              </section>
+            </>
+          )}
+
           {section === "flow" && (
             <>
               <div className="block-heading">
@@ -920,7 +970,12 @@ export default function Documentation() {
                   У клиента задаются SessionIdleTimeout и SessionAbsoluteTimeout
                   в формате TimeSpan, например 00:20:00 и 08:00:00. Оба срока
                   положительные; absolute не меньше idle и не больше 365 дней.
-                  Refresh budget фиксирован.
+                  RememberedSessionTimeout задаёт фиксированный срок явно выбранного
+                  rememberMe=true (по умолчанию 30 дней), без короткого idle.
+                  RefreshTimeout, SessionStoreTimeout и TokenRevocationTimeout
+                  задают бюджеты refresh, записи/очистки сессии и revocation.
+                  HTTP timeout IdP настраивается стандартным
+                  OpenIdConnect:BackchannelTimeout.
                 </p>
                 <p>
                   Для явного «Запомнить» передайте rememberMe=true в /.auth/login
@@ -935,21 +990,21 @@ export default function Documentation() {
               <details open>
                 <summary>Что хранится и чем шифруется</summary>
                 <p>
-                  Сессия с ticket, claims и токенами — JWE в Redis: jose-jwt,
-                  PBES2-HS256+A128KW + A256GCM. Соль, IV и ключ содержимого
-                  создаёт библиотека. EncryptionKey — пароль PBES2;
-                  Base64-строка не декодируется в raw AES key.
+                  Сессию с ticket, claims и токенами защищает ASP.NET Core
+                  Data Protection. Framework управляет ротацией ключей данных;
+                  общий зашифрованный key ring хранится в Redis.
                 </p>
                 <p>
                   Cookie со случайной ссылкой, OIDC state и antiforgery защищает
-                  ASP.NET Core Data Protection. Общий key ring хранится в Redis,
-                  descriptors зашифрованы тем же EncryptionKey. SessionKey
+                  тот же ASP.NET Core Data Protection. По умолчанию EncryptionKey
+                  защищает descriptors через jose-jwt PBES2. Host может выбрать
+                  стандартный ProtectKeysWithCertificate; пароль тогда не нужен. SessionKey
                   связывает payload с приложением, окружением, клиентом и
                   session ID.
                 </p>
                 <Code
                   label="Область Redis"
-                  value={`{application}:{environment}:{namespace}:{client}:sessions:{id}\n{application}:{environment}:{namespace}:data-protection`}
+                  value={`{application}:{environment}:{namespace}:{client}:sessions:{client-slot}:{id}\n{application}:{environment}:{namespace}:{client}:session-index:{client-slot}:...\n{application}:{environment}:{namespace}:data-protection`}
                 />
                 <p>
                   Session TTL ограничен idle и absolute. У framework key ring
@@ -981,45 +1036,46 @@ export default function Documentation() {
                 </p>
                 <p>
                   Статика, anonymous routes и antiforgery не продлевают idle.
-                  Sample polling раз в минуту в видимой вкладке поддерживает
-                  idle даже без кликов; absolute lifetime остаётся прежним.
+                  Sample проверяет /.auth/me?slide=false в видимой вкладке:
+                  запрос не продлевает idle и не запускает refresh. Прежний
+                  /.auth/me без параметра сохраняет продление сессии.
                 </p>
               </details>
               <details>
-                <summary>Миграция конфигурации на 8.1</summary>
+                <summary>Уведомления logout от Identity Provider</summary>
                 <p>
-                  Передавайте корневую configuration в AddOidcProxy. Для точных
-                  Match.Hosts удалите повторяющиеся Bff:Clients:Routes; узкие
-                  выборочные bindings можно сохранить. Замените списки cookies
-                  на ForwardCookies только для доверенных backend.
+                  Зарегистрируйте у поддерживающего OIDC Back-Channel Logout
+                  провайдера URL PublicOrigin + PathBase + /.auth/backchannel-logout.
+                  Endpoint принимает подписанный logout_token без браузерной
+                  cookie и CSRF header. JWT проверяет стандартный валидатор Microsoft.
                 </p>
                 <p>
-                  Формат сессий совместим с 7.x. Старые OidcProxy.Client /
-                  OidcProxy.CookiePolicy в YARP Metadata заменяются клиентскими
-                  Routes. При переходе с action overload проверьте регистрацию
-                  общего Redis.
+                  Сессии выбираются по issuer, клиенту и sid/sub. Индексы Redis
+                  создаются атомарно с сессией; удаления и replay marker также
+                  атомарны. Повторное уведомление не закрывает более поздний вход.
+                  Незавершённое удаление возвращает 503 и допускает повтор IdP.
+                  Для атомарных scripts ключи одного BFF-клиента используют общий
+                  hash slot Redis Cluster; распределение по shard выполняется по клиентам.
+                  Лимиты задаются в Bff:Clients:&lt;name&gt;:BackchannelLogout:
+                  MaximumRequestBodyBytes, MaximumTokenLength, MaximumTokenAge,
+                  ClockSkew, ProcessingTimeout, ReplayRetention, BatchSize и MaximumBatches.
                 </p>
               </details>
               <details>
-                <summary>Смена ключа, миграция с 6.x и backup</summary>
-                <ol>
-                  <li>Остановить старые реплики.</li>
-                  <li>
-                    Задать новый KeyNamespace и одинаковый новый EncryptionKey
-                    на всех репликах.
-                  </li>
-                  <li>Запустить BFF; пользователи входят заново.</li>
-                  <li>
-                    После отключения старых реплик удалить прежние session keys
-                    и framework key ring.
-                  </li>
-                </ol>
+                <summary>Ротация ключей и восстановление Redis</summary>
                 <p>
-                  Формат 6.x не читается. Бесшовной ротации нескольких
-                  EncryptionKey нет. Старый backup может вернуть удалённые
-                  сессии и credentials: при восстановлении сбрасывайте область
-                  сессий и/или отзывайте grants у IdP. Шифрование не защищает от
-                  отката backup.
+                  Ключи данных ротирует framework с сохранением старых ключей
+                  для чтения. Для смены сертификата защиты key ring используйте
+                  стандартные ProtectKeysWithCertificate и UnprotectKeysWithAnyCertificate.
+                  Старые сертификаты нужны, пока ими защищены записи key ring.
+                  Смена парольного EncryptionKey сама по себе не является ротацией.
+                  Формат предназначен для нового внедрения; миграторов нет.
+                </p>
+                <p>
+                  Асинхронный failover Redis или старый backup может вернуть удалённые
+                  сессии и credentials. При потере состояния закройте прежнюю область
+                  сессий и отзовите соответствующие grants у IdP. Шифрование и CAS
+                  не обеспечивают защиту от отката сохранённых данных.
                 </p>
                 <p>
                   При потере подтверждения записи может остаться недоступная
@@ -1277,7 +1333,7 @@ export default function Documentation() {
                         <td>401</td>
                         <td>
                           BFF cookie/сессия и expiry; у native API — JWT
-                          issuer/audience/signature. Повреждённый JWE, другой
+                          issuer/audience/signature. Повреждённый шифротекст, другой
                           ключ или неверный SessionKey тоже завершают сессию.
                         </td>
                       </tr>

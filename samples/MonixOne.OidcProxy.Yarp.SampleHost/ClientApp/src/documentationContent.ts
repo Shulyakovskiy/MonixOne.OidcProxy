@@ -229,7 +229,7 @@ login.searchParams.set("returnUrl", window.location.pathname + window.location.s
 window.location.assign(login.pathname + login.search);
 
 // Only the same-origin BFF receives the session cookie.
-const response = await fetch(${JSON.stringify(routes.user)}, {
+const response = await fetch(${JSON.stringify(routes.user + "?slide=false")}, {
   credentials: "same-origin",
   headers: { "X-CSRF": "1", Accept: "application/json" },
 });

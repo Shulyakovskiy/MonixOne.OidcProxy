@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Security.Claims;
+using Duende.IdentityModel.Client;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
@@ -16,6 +17,12 @@ namespace MonixOne.OidcProxy.Yarp.Authentication;
 
 internal static class OidcAuthentication
 {
+    /// <summary>
+    /// Default identity-provider HTTP timeout. The host can override the standard
+    /// OpenIdConnectOptions.BackchannelTimeout through its OIDC configuration.
+    /// </summary>
+    private static readonly TimeSpan DefaultBackchannelTimeout = TimeSpan.FromSeconds(10);
+
     internal static void Register(
         IServiceCollection services,
         string name,
@@ -108,7 +115,10 @@ internal static class OidcAuthentication
                         )
                         {
                             using var timeout = new CancellationTokenSource(
-                                TimeSpan.FromSeconds(5)
+                                context
+                                    .HttpContext.RequestServices.GetRequiredService<BffClients>()
+                                    .ByName[name]
+                                    .Options.SessionStoreTimeout
                             );
                             try
                             {
@@ -134,6 +144,7 @@ internal static class OidcAuthentication
                 OidcProxyDefaults.OpenIdConnectScheme(name),
                 oidc =>
                 {
+                    oidc.BackchannelTimeout = DefaultBackchannelTimeout;
                     oidc.TokenValidationParameters.NameClaimType = "name";
                     oidc.TokenValidationParameters.RoleClaimType = "role";
                     configureOidc(oidc);
@@ -147,8 +158,13 @@ internal static class OidcAuthentication
             );
         services
             .AddOptions<OpenIdConnectOptions>(OidcProxyDefaults.OpenIdConnectScheme(name))
-            .Configure<IOptionsMonitor<OidcProxyClientOptions>>(
+            .Configure(oidc => ConfigureProtocolOptions(oidc, name))
+            .PostConfigure<IOptionsMonitor<OidcProxyClientOptions>>(
                 (oidc, options) => ConfigureProtocolEvents(oidc, name, options.Get(name))
+            )
+            .Validate(
+                o => o.EventsType is null,
+                "OpenIdConnect EventsType is not supported: configure Events callbacks so BFF session handling remains active."
             )
             .Validate(
                 o =>
@@ -171,16 +187,11 @@ internal static class OidcAuthentication
             .ValidateOnStart();
     }
 
-    private static void ConfigureProtocolEvents(
-        OpenIdConnectOptions oidc,
-        string name,
-        OidcProxyClientOptions options
-    )
+    private static void ConfigureProtocolOptions(OpenIdConnectOptions oidc, string name)
     {
         oidc.SignInScheme = OidcProxyDefaults.CookieScheme(name);
         oidc.SignedOutCallbackPath = OidcProxyRoutes.LogoutCallback;
         oidc.RemoteSignOutPath = PathString.Empty;
-        oidc.BackchannelTimeout = TimeSpan.FromSeconds(10);
         oidc.Scope.Add("openid");
         oidc.ResponseType = OpenIdConnectResponseType.Code;
         oidc.ResponseMode = OpenIdConnectResponseMode.Query;
@@ -195,6 +206,94 @@ internal static class OidcAuthentication
         oidc.TokenValidationParameters.ValidateAudience = true;
         oidc.TokenValidationParameters.ValidateLifetime = true;
         oidc.ProtocolValidator.RequireNonce = true;
+    }
+
+    private static void ConfigureProtocolEvents(
+        OpenIdConnectOptions oidc,
+        string name,
+        OidcProxyClientOptions options
+    )
+    {
+        var pushAuthorization = oidc.Events.OnPushAuthorization;
+        oidc.Events.OnPushAuthorization = async context =>
+        {
+            await pushAuthorization(context);
+            if (
+                options.ClientCredentialStyle == ClientCredentialStyle.PostBody
+                || context.HandledClientAuthentication
+                || context.HandledPush
+                || context.SkippedPush
+            )
+                return;
+            // .NET 10's native PAR uses POST credentials. IdentityModel supplies Basic
+            // through the framework's supported PAR hook, without modifying a shared HttpClient.
+            var configuration = await oidc.ConfigurationManager!.GetConfigurationAsync(
+                context.HttpContext.RequestAborted
+            );
+            var response = await oidc.Backchannel.PushAuthorizationAsync(
+                new PushedAuthorizationRequest
+                {
+                    Address = configuration.PushedAuthorizationRequestEndpoint,
+                    ClientId = oidc.ClientId!,
+                    ClientSecret = oidc.ClientSecret,
+                    ClientCredentialStyle = options.ClientCredentialStyle,
+                    Parameters = new Parameters(
+                        context.ProtocolMessage.Parameters.Where(p =>
+                            p.Key is not ("client_id" or "client_secret")
+                        )
+                    ),
+                },
+                context.HttpContext.RequestAborted
+            );
+            if (
+                response.IsError
+                || string.IsNullOrWhiteSpace(response.RequestUri)
+                || response.ExpiresIn <= 0
+            )
+                throw new OpenIdConnectProtocolException(
+                    "The identity provider rejected pushed authorization."
+                );
+            context.HandlePush(response.RequestUri);
+        };
+        var codeReceived = oidc.Events.OnAuthorizationCodeReceived;
+        oidc.Events.OnAuthorizationCodeReceived = async context =>
+        {
+            await codeReceived(context);
+            if (
+                options.ClientCredentialStyle == ClientCredentialStyle.PostBody
+                || context.HandledCodeRedemption
+                || context.Result is not null
+            )
+                return;
+            var request = context.TokenEndpointRequest!;
+            var configuration = await oidc.ConfigurationManager!.GetConfigurationAsync(
+                context.HttpContext.RequestAborted
+            );
+            // IdentityModel implements client_secret_basic; the native handler still
+            // validates the complete token response, signature, state and nonce.
+            var response = await context.Backchannel.RequestTokenAsync(
+                new TokenRequest
+                {
+                    Address = configuration.TokenEndpoint,
+                    GrantType = request.GrantType,
+                    ClientId = request.ClientId!,
+                    ClientSecret = request.ClientSecret,
+                    ClientCredentialStyle = options.ClientCredentialStyle,
+                    Parameters = new Parameters(
+                        request.Parameters.Where(p =>
+                            p.Key is not ("client_id" or "client_secret" or "grant_type")
+                        )
+                    ),
+                },
+                context.HttpContext.RequestAborted
+            );
+            if (response.IsError)
+            {
+                context.Fail("The identity provider rejected authorization code redemption.");
+                return;
+            }
+            context.HandleCodeRedemption(new OpenIdConnectMessage(response.Raw!));
+        };
         var validated = oidc.Events.OnTokenValidated;
         oidc.Events.OnTokenValidated = async context =>
         {
@@ -211,8 +310,27 @@ internal static class OidcAuthentication
                 return;
             }
 
+            // The native handler skips protocol validation after manual code redemption.
+            // Use its standard validator here for every code response, including Basic auth.
+            if (context.TokenEndpointResponse is not null)
+                oidc.ProtocolValidator.ValidateTokenResponse(
+                    new OpenIdConnectProtocolValidationContext
+                    {
+                        ClientId = oidc.ClientId,
+                        Nonce = context.Nonce,
+                        ProtocolMessage = context.TokenEndpointResponse,
+                        ValidatedIdToken = context.SecurityToken,
+                    }
+                );
+
             // Preserve protocol values before framework claim actions remove nonce.
             // The validated inner token also supports signed-and-encrypted ID tokens.
+            var providerToken = context.SecurityToken.InnerToken ?? context.SecurityToken;
+            context.Properties!.Items[BffConstants.ProviderIssuer] = providerToken.Issuer;
+            context.Properties.Items[BffConstants.ProviderSubject] = providerToken.Subject;
+            context.Properties.Items[BffConstants.ProviderSession] = providerToken
+                .Claims.FirstOrDefault(claim => claim.Type == "sid")
+                ?.Value;
             context.Properties!.Items[BffConstants.OriginalNonce] = context
                 .SecurityToken
                 .Payload
@@ -235,8 +353,10 @@ internal static class OidcAuthentication
                 OidcProxyRoutes.LoginCallback
             );
         };
-        oidc.Events.OnRedirectToIdentityProviderForSignOut = context =>
+        var signOutRedirect = oidc.Events.OnRedirectToIdentityProviderForSignOut;
+        oidc.Events.OnRedirectToIdentityProviderForSignOut = async context =>
         {
+            await signOutRedirect(context);
             context.ProtocolMessage.ClientId = oidc.ClientId;
             context.ProtocolMessage.PostLogoutRedirectUri = UriHelper.BuildAbsolute(
                 options.PublicOrigin!.Scheme,
@@ -246,7 +366,6 @@ internal static class OidcAuthentication
             );
             context.ProtocolMessage.IdTokenHint =
                 context.HttpContext.Items[BffConstants.LogoutIdTokenItem] as string;
-            return Task.CompletedTask;
         };
         var tokenResponse = oidc.Events.OnTokenResponseReceived;
         oidc.Events.OnTokenResponseReceived = async context =>
@@ -258,6 +377,10 @@ internal static class OidcAuthentication
                     .TokenEndpointResponse
                     .RefreshToken;
             await tokenResponse(context);
+            if (context.Result is not null)
+            {
+                return;
+            }
             if (
                 string.IsNullOrWhiteSpace(context.TokenEndpointResponse.AccessToken)
                 || !string.Equals(
@@ -276,13 +399,14 @@ internal static class OidcAuthentication
             )
                 context.Fail("Invalid token endpoint response.");
         };
+        var ticketReceived = oidc.Events.OnTicketReceived;
         oidc.Events.OnTicketReceived = async context =>
         {
             var services = context.HttpContext.RequestServices;
             var now = services.GetRequiredService<TimeProvider>().GetUtcNow();
             var store = services.GetRequiredKeyedService<SessionStore>(name);
             // These operations can outlive an aborted request or host shutdown.
-            // Capture cleanup dependencies before starting the server-owned SET.
+            // Capture cleanup dependencies before starting server-owned Redis creation.
             var tokens = services.GetRequiredKeyedService<TokenSession>(name);
             var sessionLogger = services
                 .GetRequiredService<ILoggerFactory>()
@@ -292,13 +416,11 @@ internal static class OidcAuthentication
             var expiresAt =
                 now
                 + (remembered ? options.RememberedSessionTimeout : options.SessionAbsoluteTimeout);
-            properties.IssuedUtc = now;
-            properties.ExpiresUtc = expiresAt;
             properties.Items.TryGetValue(BffConstants.PreviousSession, out var previousId);
             properties.Items.Remove(BffConstants.PreviousSession);
             var fullTicket = new AuthenticationTicket(
                 context.Principal!,
-                properties,
+                properties.Clone(),
                 OidcProxyDefaults.CookieScheme(name)
             );
             // From here the ticket creation/cleanup block owns these credentials.
@@ -306,11 +428,43 @@ internal static class OidcAuthentication
             string? id = null;
             try
             {
+                await ticketReceived(context);
+                if (context.Result is not null)
+                {
+                    await tokens.RevokeAsync(fullTicket, CancellationToken.None);
+                    return;
+                }
+                // Host callbacks may replace properties. Keep validated credentials,
+                // provider identity and server-owned expiry in the actual ticket.
+                properties = context.Properties!;
+                properties.StoreTokens(fullTicket.Properties.GetTokens());
+                foreach (
+                    var key in new[]
+                    {
+                        BffConstants.OriginalNonce,
+                        BffConstants.OriginalAuthTime,
+                        BffConstants.ProviderIssuer,
+                        BffConstants.ProviderSubject,
+                        BffConstants.ProviderSession,
+                    }
+                )
+                {
+                    if (fullTicket.Properties.Items.TryGetValue(key, out var value))
+                        properties.Items[key] = value;
+                }
+                properties.IssuedUtc = now;
+                properties.ExpiresUtc = expiresAt;
+                properties.IsPersistent = remembered;
+                fullTicket = new AuthenticationTicket(
+                    context.Principal!,
+                    properties,
+                    OidcProxyDefaults.CookieScheme(name)
+                );
                 id = await store.CreateAsync(fullTicket, context.HttpContext.RequestAborted);
                 context.HttpContext.RequestAborted.ThrowIfCancellationRequested();
                 if (previousId is not null)
                 {
-                    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                    using var timeout = new CancellationTokenSource(options.SessionStoreTimeout);
                     var previousTicket = await store.TakeAsync(previousId, timeout.Token);
                     if (previousTicket is not null)
                         await tokens.RevokeAsync(previousTicket, CancellationToken.None);
@@ -332,7 +486,7 @@ internal static class OidcAuthentication
             {
                 if (id is not null)
                 {
-                    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                    using var timeout = new CancellationTokenSource(options.SessionStoreTimeout);
                     try
                     {
                         await store.RemoveAsync(id, timeout.Token);
@@ -376,6 +530,7 @@ internal static class OidcAuthentication
             }
         };
 
+        var remoteFailure = oidc.Events.OnRemoteFailure;
         oidc.Events.OnRemoteFailure = async context =>
         {
             context.HandleResponse();
@@ -416,6 +571,7 @@ internal static class OidcAuthentication
                     "OIDC sign-in failed. Failure type: {FailureType}",
                     context.Failure?.GetType().Name
                 );
+            await remoteFailure(context);
         };
     }
 }

@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text.Json.Nodes;
-using Jose;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.Extensions.Options;
 using Microsoft.Net.Http.Headers;
 
 namespace MonixOne.OidcProxy.Yarp.Tests;
@@ -38,12 +39,7 @@ public sealed class RememberedSessionTests(InfrastructureFixture infrastructure)
             .Single();
         var database = infrastructure.Connection.GetDatabase();
         var state = JsonNode.Parse(
-            JWT.Decrypt(
-                (string)(await database.StringGetAsync(key))!,
-                infrastructure.EncryptionKey,
-                JweAlgorithm.PBES2_HS256_A128KW,
-                JweEncryption.A256GCM
-            )
+            host.SessionProtector.Unprotect((string)(await database.StringGetAsync(key))!)
         )!;
         var absolute = state["AbsoluteExpiresAt"]!.GetValue<DateTimeOffset>();
         var idle = state["IdleExpiresAt"]!.GetValue<DateTimeOffset>();
@@ -63,6 +59,55 @@ public sealed class RememberedSessionTests(InfrastructureFixture infrastructure)
             idle.ShouldBe(host.Clock.GetUtcNow() + TimeSpan.FromMinutes(20));
             ttl!.Value.ShouldBeLessThanOrEqualTo(TimeSpan.FromMinutes(20));
         }
+    }
+
+    [Theory]
+    [InlineData("00:00:00")]
+    [InlineData("366.00:00:00")]
+    public void Startup_InvalidRememberedLifetime_RejectsConfiguration(string value)
+    {
+        // Arrange
+        using var identity = new OidcWireMock(infrastructure);
+        using var host = identity.CreateBff();
+        host.ConfigureClientOptions = options =>
+            options.RememberedSessionTimeout = TimeSpan.Parse(value);
+
+        // Act
+        var failure = Should.Throw<OptionsValidationException>(() => host.CreateBrowser());
+
+        // Assert
+        failure.Message.ShouldContain("RememberedSessionTimeout");
+    }
+
+    [Fact]
+    public async Task RememberedSession_LogoutIndicesRetainTheConfiguredAbsoluteLifetime()
+    {
+        // Arrange
+        using var identity = new OidcWireMock(infrastructure);
+        await using var host = identity.CreateBff();
+        var rememberedLifetime = TimeSpan.FromDays(14);
+        host.ConfigureClientOptions = options =>
+            options.RememberedSessionTimeout = rememberedLifetime;
+        using var browser = host.CreateBrowser();
+        using var provider = identity.CreateIdentityBrowser();
+
+        // Act
+        using var login = await browser.LoginAsync(provider, rememberMe: true);
+        var server = infrastructure.Connection.GetServer(
+            infrastructure.Connection.GetEndPoints().Single()
+        );
+        var database = infrastructure.Connection.GetDatabase();
+        var indices = server
+            .Keys(pattern: "test-spa:testing:" + host.KeyNamespace + ":spa:*index:*")
+            .ToArray();
+
+        // Assert: provider logout can still find sessions beyond the ordinary eight-hour lifetime.
+        login.StatusCode.ShouldBe(HttpStatusCode.Redirect);
+        indices.ShouldNotBeEmpty();
+        foreach (var index in indices)
+            (await database.KeyTimeToLiveAsync(index))!.Value.ShouldBeGreaterThan(
+                rememberedLifetime - TimeSpan.FromMinutes(1)
+            );
     }
 
     [Fact]

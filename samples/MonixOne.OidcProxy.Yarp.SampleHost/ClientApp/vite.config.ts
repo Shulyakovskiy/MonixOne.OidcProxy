@@ -54,6 +54,12 @@ function offlineDocumentation(): Plugin {
 export default defineConfig(({ command, mode }) => {
   const define = {
     "import.meta.env.VITE_PACKAGE_VERSION": JSON.stringify(version),
+    "import.meta.env.VITE_DOCUMENTED_APPSETTINGS": JSON.stringify(
+      readFileSync(
+        new URL("../../../docs/examples/br-admin-identity/appsettings.json", import.meta.url),
+        "utf8",
+      ),
+    ),
   };
   if (command === "build" && mode === "docs") {
     return {

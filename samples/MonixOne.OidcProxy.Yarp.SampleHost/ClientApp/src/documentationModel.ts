@@ -115,7 +115,7 @@ export const actors: Record<
   },
   redis: {
     title: "Redis",
-    subtitle: "JWE-сессии · key ring",
+    subtitle: "Data Protection · key ring",
     detail:
       "Общий key ring и отдельные session keys клиентов. Нет memory fallback. Реплики используют одинаковые область ключей и EncryptionKey.",
   },
