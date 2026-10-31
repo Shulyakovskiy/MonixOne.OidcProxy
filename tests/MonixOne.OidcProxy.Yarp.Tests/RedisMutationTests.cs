@@ -18,7 +18,7 @@ public sealed class RedisMutationTests(InfrastructureFixture infrastructure)
         await using var host = identity.CreateBff(connection: connection);
         using var browser = host.CreateBrowser();
         using var provider = identity.CreateIdentityBrowser();
-        var creation = gate.HoldNextSessionReply("SET");
+        var creation = gate.HoldNextSessionReply("EVAL");
         var login = browser.LoginAsync(provider);
         await creation.Reached.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
 
@@ -156,9 +156,9 @@ public sealed class RedisMutationTests(InfrastructureFixture infrastructure)
         await using var host = identity.CreateBff(connection: connection);
         using var browser = host.CreateBrowser();
         using var provider = identity.CreateIdentityBrowser();
-        var creation = gate.HoldNextSessionReply("SET");
+        var creation = gate.HoldNextSessionReply("EVAL");
 
-        // Act: an applied but unacknowledged SET can leave only a TTL-bounded record.
+        // Act: applied but unacknowledged creation can leave only a TTL-bounded record.
         var login = browser.LoginAsync(provider);
         await creation.Reached.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
         using var failed = await login.WaitAsync(TimeSpan.FromSeconds(10), ct);
@@ -194,10 +194,10 @@ public sealed class RedisMutationTests(InfrastructureFixture infrastructure)
         using var provider = identity.CreateIdentityBrowser();
         using var start = await browser.GetAsync(OidcProxyRoutes.Login, ct);
         using var authorization = await provider.GetAsync(start.Headers.Location, ct);
-        var creation = gate.HoldNextSessionReply("SET");
+        var creation = gate.HoldNextSessionReply("EVAL");
         using var disconnected = CancellationTokenSource.CreateLinkedTokenSource(ct);
 
-        // Act: cancellation arrives after SET, before its acknowledgement.
+        // Act: cancellation arrives after creation, before its acknowledgement.
         var callback = browser.GetAsync(authorization.Headers.Location, disconnected.Token);
         await creation.Reached.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
         disconnected.Cancel();
@@ -256,12 +256,14 @@ public sealed class RedisMutationTests(InfrastructureFixture infrastructure)
         using var connection = await gate.ConnectAsync();
         using var identity = new OidcWireMock(infrastructure);
         await using var host = identity.CreateBff(connection: connection);
+        host.ConfigureClientOptions = options =>
+            options.SessionStoreTimeout = TimeSpan.FromMilliseconds(100);
         using var browser = host.CreateBrowser();
         using var provider = identity.CreateIdentityBrowser();
         using var login = await browser.LoginAsync(provider);
         var deletion = gate.HoldNextSessionReply("GETDEL");
 
-        // Act: exercise the actual internal logout timeout, not a caller cancellation.
+        // Act: exercise the configured server budget, not a caller cancellation or Redis timeout.
         var logout = browser.LogoutAsync(cancellationToken: ct);
         await deletion.Reached.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
         using var failed = await logout.WaitAsync(TimeSpan.FromSeconds(10), ct);

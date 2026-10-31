@@ -34,7 +34,7 @@ internal sealed class BffRequestMiddleware(RequestDelegate next, ILoggerFactory 
         });
     }
 
-    public async Task InvokeAsync(HttpContext context, BffClients clients)
+    public async Task InvokeAsync(HttpContext context, BffClients clients, BffTelemetry telemetry)
     {
         var endpoint = context.GetEndpoint();
         var client = endpoint?.Metadata.GetMetadata<BffClient>();
@@ -96,6 +96,7 @@ internal sealed class BffRequestMiddleware(RequestDelegate next, ILoggerFactory 
         context.User = authentication.Principal ?? new ClaimsPrincipal(new ClaimsIdentity());
         if (context.Items.ContainsKey(typeof(SessionUnavailableException)))
         {
+            telemetry.SessionUnavailable(client.Name);
             context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
             return;
         }
@@ -148,7 +149,13 @@ internal sealed class BffRequestMiddleware(RequestDelegate next, ILoggerFactory 
                         : null;
                 var ticket = await context
                     .RequestServices.GetRequiredKeyedService<TokenSession>(client.Name)
-                    .GetActiveTicketAsync(id, context.RequestAborted, snapshot);
+                    .GetActiveTicketAsync(
+                        id,
+                        context.RequestAborted,
+                        snapshot,
+                        renewSession: context.Request.Path != OidcProxyRoutes.User
+                            || context.Request.Query["slide"] != "false"
+                    );
                 if (ticket is null)
                 {
                     await context.SignOutAsync(client.CookieScheme);
@@ -179,6 +186,7 @@ internal sealed class BffRequestMiddleware(RequestDelegate next, ILoggerFactory 
         {
             if (context.Response.HasStarted)
                 throw;
+            telemetry.SessionUnavailable(client.Name);
             _logger.LogError(
                 "BFF session unavailable. Failure type: {FailureType}",
                 e.GetType().Name

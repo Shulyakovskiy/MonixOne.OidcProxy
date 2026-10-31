@@ -1,7 +1,7 @@
 using System.Net;
 using System.Text.Json.Nodes;
-using Jose;
 using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -10,6 +10,38 @@ namespace MonixOne.OidcProxy.Yarp.Tests;
 [Collection("Infrastructure")]
 public sealed class SessionLifetimeTests(InfrastructureFixture infrastructure)
 {
+    [Theory]
+    [InlineData(true, HttpStatusCode.Unauthorized)]
+    [InlineData(false, HttpStatusCode.OK)]
+    public async Task Session_InspectionCanOptOutOfIdleRenewal(
+        bool readOnly,
+        HttpStatusCode expected
+    )
+    {
+        // Arrange: polling occurs after token expiry but before session idle expiry.
+        var ct = TestContext.Current.CancellationToken;
+        using var identity = new OidcWireMock(infrastructure);
+        await using var host = identity.CreateBff();
+        using var browser = host.CreateBrowser();
+        using var provider = identity.CreateIdentityBrowser();
+        using var login = await browser.LoginAsync(provider);
+        host.Clock.Advance(TimeSpan.FromMinutes(10));
+
+        // Act
+        using var inspection = await browser.ApiAsync(
+            OidcProxyRoutes.User + (readOnly ? "?slide=false" : ""),
+            ct
+        );
+        var refreshesAfterInspection = identity.RefreshRequests;
+        host.Clock.Advance(TimeSpan.FromMinutes(11));
+        using var later = await browser.ApiAsync(OidcProxyRoutes.User + "?slide=false", ct);
+
+        // Assert: the old endpoint behavior is retained unless explicitly disabled.
+        inspection.StatusCode.ShouldBe(HttpStatusCode.OK);
+        refreshesAfterInspection.ShouldBe(readOnly ? 0 : 1);
+        later.StatusCode.ShouldBe(expected);
+    }
+
     [Fact]
     public async Task Session_ExpiresAfterCookieValidation_DoesNotReviveCachedSnapshot()
     {
@@ -89,9 +121,9 @@ public sealed class SessionLifetimeTests(InfrastructureFixture infrastructure)
     }
 
     [Fact]
-    public async Task Session_JweRecordWithoutRefreshAt_CalculatesThresholdOnActivity()
+    public async Task Session_RecordWithoutRefreshAt_CalculatesThresholdOnActivity()
     {
-        // Arrange: RefreshAt is optional; the JWE and session binding remain valid.
+        // Arrange: RefreshAt is optional; framework protection and session binding remain valid.
         var ct = TestContext.Current.CancellationToken;
         using var identity = new OidcWireMock(infrastructure);
         await using var host = identity.CreateBff();
@@ -105,28 +137,15 @@ public sealed class SessionLifetimeTests(InfrastructureFixture infrastructure)
             .Keys(pattern: "test-spa:testing:" + host.KeyNamespace + ":spa:sessions:*")
             .Single();
         var database = infrastructure.Connection.GetDatabase();
+        var protector = host.SessionProtector;
         var payload = JsonNode.Parse(
-            JWT.Decrypt(
-                (string)(await database.StringGetAsync(key))!,
-                infrastructure.EncryptionKey,
-                JweAlgorithm.PBES2_HS256_A128KW,
-                JweEncryption.A256GCM
-            )
+            protector.Unprotect((string)(await database.StringGetAsync(key))!)
         )!;
         payload.AsObject().Remove("RefreshAt");
         var ttl =
             await database.KeyTimeToLiveAsync(key)
             ?? throw new InvalidOperationException("Fixture session must have a TTL.");
-        await database.StringSetAsync(
-            key,
-            JWT.Encode(
-                payload.ToJsonString(),
-                infrastructure.EncryptionKey,
-                JweAlgorithm.PBES2_HS256_A128KW,
-                JweEncryption.A256GCM
-            ),
-            ttl
-        );
+        await database.StringSetAsync(key, protector.Protect(payload.ToJsonString()), ttl);
 
         // Act
         using var initial = await browser.ApiAsync(cancellationToken: ct);

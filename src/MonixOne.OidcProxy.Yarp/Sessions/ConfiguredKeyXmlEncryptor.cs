@@ -8,15 +8,27 @@ namespace MonixOne.OidcProxy.Yarp.Sessions;
 
 /// <summary>
 /// Adapts jose-jwt to framework key storage for cookies, OIDC state and antiforgery.
-/// Session data is encrypted directly by SessionStore.
+/// Session data uses the same framework key ring through IDataProtector.
 /// </summary>
 internal sealed class ConfiguredKeyXmlEncryptor(IServiceProvider services)
     : IXmlEncryptor,
         IXmlDecryptor
 {
-    private readonly string _key = services
-        .GetRequiredService<IOptions<ProxyOptions>>()
-        .Value.EncryptionKey;
+    private readonly string _key = GetKey(services);
+
+    private static string GetKey(IServiceProvider services)
+    {
+        var key = services.GetRequiredService<IOptions<ProxyOptions>>().Value.EncryptionKey;
+        if (string.IsNullOrWhiteSpace(key))
+            throw new OptionsValidationException(
+                nameof(ProxyOptions),
+                typeof(ProxyOptions),
+                [
+                    "Bff:EncryptionKey must contain a strong random secret, or configure standard Data Protection key encryption such as ProtectKeysWithCertificate.",
+                ]
+            );
+        return key;
+    }
 
     public EncryptedXmlInfo Encrypt(XElement plaintextElement) =>
         new(

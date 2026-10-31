@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.WebUtilities;
+using Microsoft.Extensions.Primitives;
 using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Tokens;
 using WireMock;
@@ -29,6 +30,10 @@ internal sealed class OidcWireMock : IDisposable
     private readonly InfrastructureFixture _infrastructure;
     private readonly ConcurrentDictionary<string, (string Nonce, string Challenge)> _codes = new();
     private readonly ConcurrentDictionary<string, string> _refreshTokens = new();
+    private readonly ConcurrentDictionary<
+        string,
+        Dictionary<string, StringValues>
+    > _pushedAuthorizations = new();
     private readonly List<RSA> _keys = [];
     private RsaSecurityKey _key;
     internal WireMockServer Server { get; }
@@ -45,6 +50,10 @@ internal sealed class OidcWireMock : IDisposable
     internal int AccessTokenLifetime { get; set; } = 120;
     internal long? AuthenticationTime { get; set; }
     internal string? Role { get; set; }
+    internal string? SessionId { get; set; } = "provider-session";
+    internal bool RequireBasicClientAuthentication { get; set; }
+    internal bool AdvertisePushedAuthorization { get; set; }
+    internal int PushedRequests;
     internal SymmetricSecurityKey EncryptionKey { get; } = new(RandomNumberGenerator.GetBytes(32));
     internal string LastAccessToken = string.Empty;
     internal string LastRefreshToken = string.Empty;
@@ -90,12 +99,18 @@ internal sealed class OidcWireMock : IDisposable
                                 jwks_uri = Url("/jwks"),
                                 end_session_endpoint = Url("/logout"),
                                 revocation_endpoint = Url("/revoke"),
+                                pushed_authorization_request_endpoint = AdvertisePushedAuthorization
+                                    ? Url("/par")
+                                    : null,
+                                require_pushed_authorization_requests = AdvertisePushedAuthorization,
                                 response_types_supported = new[] { "code" },
                                 subject_types_supported = new[] { "public" },
                                 id_token_signing_alg_values_supported = new[] { "RS256" },
                                 token_endpoint_auth_methods_supported = new[]
                                 {
-                                    "client_secret_post",
+                                    RequireBasicClientAuthentication
+                                        ? "client_secret_basic"
+                                        : "client_secret_post",
                                 },
                             }
                         )
@@ -124,6 +139,35 @@ internal sealed class OidcWireMock : IDisposable
                     )
             );
         Server
+            .Given(Request.Create().WithPath("/par").UsingPost())
+            .RespondWith(
+                Response
+                    .Create()
+                    .WithCallback(request =>
+                    {
+                        Interlocked.Increment(ref PushedRequests);
+                        var parameters = QueryHelpers.ParseQuery(request.Body ?? string.Empty);
+                        if (
+                            RequireBasicClientAuthentication
+                                ? !HasBasicCredentials(request)
+                                : parameters["client_id"] != RegisteredClientId
+                                    || parameters["client_secret"] != ClientSecret
+                        )
+                            return Json(new { error = "invalid_client" }, 400);
+                        var requestUri =
+                            "urn:ietf:params:oauth:request_uri:" + Guid.NewGuid().ToString("N");
+                        _pushedAuthorizations[requestUri] = parameters;
+                        return Json(
+                            new
+                            {
+                                request_uri = requestUri,
+                                expires_in = (int)TimeSpan.FromMinutes(1).TotalSeconds,
+                            },
+                            201
+                        );
+                    })
+            );
+        Server
             .Given(Request.Create().WithPath("/authorize").UsingGet())
             .RespondWith(
                 Response
@@ -131,6 +175,17 @@ internal sealed class OidcWireMock : IDisposable
                     .WithCallback(request =>
                     {
                         var query = QueryHelpers.ParseQuery(new Uri(request.Url).Query);
+                        if (AdvertisePushedAuthorization)
+                        {
+                            if (
+                                !_pushedAuthorizations.TryRemove(
+                                    query["request_uri"].ToString(),
+                                    out var pushed
+                                )
+                            )
+                                return Json(new { error = "invalid_request_uri" }, 400);
+                            query = pushed;
+                        }
                         var code = Guid.NewGuid().ToString("N"); // Unique one-use credentials, not random business test data.
                         _codes[code] = (
                             query["nonce"].ToString(),
@@ -161,6 +216,8 @@ internal sealed class OidcWireMock : IDisposable
                     .Create()
                     .WithCallback(request =>
                     {
+                        if (RequireBasicClientAuthentication && !HasBasicCredentials(request))
+                            return Json(new { error = "invalid_client" }, 400);
                         var token = QueryHelpers
                             .ParseQuery(request.Body ?? string.Empty)["token"]
                             .ToString();
@@ -235,7 +292,11 @@ internal sealed class OidcWireMock : IDisposable
     private async Task<IResponseMessage> ExchangeAsync(IRequestMessage request)
     {
         var form = QueryHelpers.ParseQuery(request.Body ?? string.Empty);
-        if (form["client_id"] != RegisteredClientId || form["client_secret"] != ClientSecret)
+        if (
+            RequireBasicClientAuthentication
+                ? !HasBasicCredentials(request)
+                : form["client_id"] != RegisteredClientId || form["client_secret"] != ClientSecret
+        )
             return Json(new { error = "invalid_client" }, 400);
         var refreshing = form["grant_type"] == "refresh_token";
         string? nonce;
@@ -325,6 +386,8 @@ internal sealed class OidcWireMock : IDisposable
             );
         if (Role is not null)
             claims.Add(new Claim("role", Role));
+        if (SessionId is not null)
+            claims.Add(new Claim("sid", SessionId));
         return new JsonWebTokenHandler().CreateToken(
             new SecurityTokenDescriptor
             {
@@ -368,6 +431,65 @@ internal sealed class OidcWireMock : IDisposable
         };
         response.AddHeader("Content-Type", "application/json");
         return response;
+    }
+
+    private bool HasBasicCredentials(IRequestMessage request) =>
+        request.Headers?.TryGetValue("Authorization", out var values) == true
+        && values.SingleOrDefault()
+            == "Basic "
+                + Convert.ToBase64String(
+                    Encoding.ASCII.GetBytes(RegisteredClientId + ":" + ClientSecret)
+                );
+
+    internal string CreateLogoutToken(
+        string? subject = "user-1",
+        string? sid = "provider-session",
+        string? defect = null,
+        string? jwtId = null
+    )
+    {
+        var now = DateTime.UtcNow;
+        var claims = new Dictionary<string, object>
+        {
+            ["jti"] = defect == "missing-jti" ? "" : jwtId ?? Guid.NewGuid().ToString("N"),
+            ["events"] = new Dictionary<string, object>
+            {
+                [
+                    defect == "events"
+                        ? "invalid"
+                        : "http://schemas.openid.net/event/backchannel-logout"
+                ] = new Dictionary<string, object>(),
+            },
+        };
+        if (subject is not null)
+            claims["sub"] = subject;
+        if (sid is not null)
+            claims["sid"] = sid;
+        if (defect == "nonce")
+            claims["nonce"] = "";
+        return new JsonWebTokenHandler { SetDefaultTimesOnTokenCreation = false }.CreateToken(
+            new SecurityTokenDescriptor
+            {
+                Issuer =
+                    defect == "issuer" ? "https://other.example" : Origin.AbsoluteUri.TrimEnd('/'),
+                Audience = defect == "audience" ? "other-client" : RegisteredClientId,
+                IssuedAt =
+                    defect == "old" ? now.AddHours(-1)
+                    : defect == "future" ? now.AddHours(1)
+                    : now,
+                NotBefore = now.AddHours(-2),
+                Expires =
+                    defect == "no-exp" ? null
+                    : defect == "expired" ? now.AddHours(-1)
+                    : now.AddHours(2),
+                Claims = claims,
+                SigningCredentials =
+                    defect == "unsigned"
+                        ? null
+                        : new SigningCredentials(_key, SecurityAlgorithms.RsaSha256),
+                TokenType = "logout+jwt",
+            }
+        );
     }
 
     public void Dispose()

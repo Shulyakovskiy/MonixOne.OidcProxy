@@ -257,6 +257,20 @@ it("opens deep links and handles browser navigation", () => {
   );
 });
 
+it("shows the complete commented appsettings reference with runtime-owned boundaries", () => {
+  render(<Documentation />);
+  fireEvent.click(screen.getByRole("link", { name: /Все настройки/ }));
+  const reference = screen.getByRole("region", {
+    name: "appsettings.json — все настройки с описаниями",
+  });
+  expect(reference).toHaveTextContent("BackchannelLogout");
+  expect(reference).toHaveTextContent("ReplayRetention");
+  expect(reference).toHaveTextContent("ClientCredentialStyle");
+  expect(reference).toHaveTextContent("TokenRevocationTimeout");
+  expect(reference).toHaveTextContent("KnownIPNetworks");
+  expect(screen.getByRole("heading", { name: "Стандартные настройки host" })).toBeVisible();
+});
+
 it("updates the route inspector when CSRF and profile conditions change", () => {
   render(<Documentation />);
   fireEvent.click(screen.getByRole("link", { name: /Маршруты/ }));

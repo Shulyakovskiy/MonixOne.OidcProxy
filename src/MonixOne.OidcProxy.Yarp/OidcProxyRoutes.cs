@@ -36,6 +36,11 @@ public static class OidcProxyRoutes
     public const string LogoutCallback = "/.auth/signout-callback";
 
     /// <summary>
+    /// Receives signed OpenID Connect back-channel logout notifications from the provider.
+    /// </summary>
+    public const string BackchannelLogout = "/.auth/backchannel-logout";
+
+    /// <summary>
     /// Returns the browser to the SPA entry point.
     /// </summary>
     public const string ApplicationRoot = "/";

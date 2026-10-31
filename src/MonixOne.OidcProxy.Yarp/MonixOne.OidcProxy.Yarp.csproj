@@ -5,11 +5,11 @@
     <RootNamespace>MonixOne.OidcProxy.Yarp</RootNamespace>
     <PackageTags>aspnetcore;bff;spa;yarp;oauth2;openid-connect;openiddict;redis</PackageTags>
     <PackageIcon>nuget-icon.png</PackageIcon>
-    <Version>8.1.2</Version>
+    <Version>9.0.0</Version>
     <Authors>Albert Starreveld; Shulyakovsky.E</Authors>
     <Company>MonixOne</Company>
     <Copyright>MonixOne contributors; upstream copyright retained</Copyright>
-    <Description>A .NET 10 Backend-for-Frontend for single-page applications using YARP and standard OpenID Connect. Encrypts Redis session data directly with jose-jwt, forwards user access tokens to configured APIs, and coordinates refresh and logout across replicas. Compatible with OpenIddict.</Description>
+    <Description>A .NET 10 Backend-for-Frontend using YARP, standard OpenID Connect and Redis. Framework Data Protection encrypts server sessions and rotates data keys. Supports signed back-channel logout, coordinated refresh across replicas and host-owned OpenTelemetry. Compatible with OpenIddict.</Description>
     <RepositoryType>git</RepositoryType>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
@@ -20,7 +20,7 @@
     <PackageProjectUrl>https://github.com/Shulyakovskiy/MonixOne.OidcProxy.Yarp</PackageProjectUrl>
     <PackageLicenseExpression>LGPL-3.0-only</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageReleaseNotes>SPA activation requires PublicOrigin: an orphaned client secret no longer enables BFF. Native YARP works without SPA profiles or BFF secrets. Package-owned named CORS policy preserves host middleware order. Existing Redis instances and ownership are retained across service aliases. Unified native/BFF routing and gateway trace propagation are supported. Backend cookies are isolated by client and cluster using __Host-Http- cookies with Path=/ and server-side backend path validation. Legacy __Secure- bridge cookies are ignored; restart pending OAuth connections after upgrading all replicas.</PackageReleaseNotes>
+    <PackageReleaseNotes>New-deployment session format uses ASP.NET Core Data Protection with shared Redis keys and standard key rotation. No migration reader. Adds signed back-channel logout with configurable limits and atomic replay-safe deletion, read-only session inspection, consistent POST/Basic client authentication, composed OIDC events and built-in Meter/ActivitySource instrumentation. Redis/CAS/YARP architecture, browser API contracts and existing configuration defaults are retained.</PackageReleaseNotes>
   </PropertyGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />

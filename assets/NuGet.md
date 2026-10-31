@@ -16,14 +16,25 @@ forwarded headers and shared Redis registration. Exact native YARP hosts select 
 clients; `ForwardCookies` enables isolated backend cookies without provider-specific lists.
 The cookie bridge uses `__Host-Http-` cookies with `Path=/` and no Domain, preventing
 sibling-domain cookie tossing. Original backend paths are enforced during forwarding.
-Old `__Secure-` bridge cookies are ignored; restart pending OAuth connections after upgrading all replicas.
 
 Configure confidential clients, exact HTTPS callbacks and a trusted proxy boundary.
-Supply Redis, `Bff__EncryptionKey` and client secrets through a secret provider.
-Keep the Redis scope and encryption key consistent across replicas and restarts.
+Supply Redis and client secrets through a secret provider. Protect the shared key
+ring with `Bff__EncryptionKey` or the host's standard certificate configuration.
+Keep the Redis scope and key-ring decryption configuration consistent across replicas and restarts.
+
+ASP.NET Core Data Protection encrypts sessions and manages data-key rotation in the
+shared Redis key ring. Hosts can use standard certificate key protection instead
+of the password wrapper. This format targets a new deployment; no migration reader is included.
+Signed OIDC back-channel logout is available at `/.auth/backchannel-logout`.
+Configure its limits through each client's `BackchannelLogout` options.
+Use `/.auth/me?slide=false` to inspect a session without renewing idle expiry.
+`ClientCredentialStyle` selects POST-body or Basic authentication consistently for
+PAR, code exchange, refresh and revocation. OIDC `Events` callbacks are composed;
+`EventsType` is not supported. Collect the `MonixOne.OidcProxy.Yarp` Meter and
+ActivitySource with the host's telemetry stack.
 
 [Interactive setup guide](https://github.com/Shulyakovskiy/MonixOne.OidcProxy.Yarp#readme):
-configuration generator, middleware/flow diagrams, route simulator, sessions, migration and testing.
+configuration generator, middleware/flow diagrams, route simulator, sessions and testing.
 Download `docs/index.html` from the repository to use the guide offline as a single file.
 
 Based on [OidcProxy.Net](https://github.com/oidcproxydotnet/OidcProxy.Net).

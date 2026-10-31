@@ -11,8 +11,8 @@ export const sessionQueryOptions = queryOptions({
   retry: false,
   refetchOnWindowFocus: true,
   refetchOnReconnect: true,
-  // A visible authenticated SPA keeps its server session active. The BFF alone
-  // refreshes credentials, and its absolute session lifetime is never extended.
+  // Poll only while visible. Session inspection does not extend idle expiry;
+  // protected API activity remains responsible for renewal and refresh.
   refetchInterval: (query) => (query.state.data ? 60_000 : false),
   refetchIntervalInBackground: false,
 });

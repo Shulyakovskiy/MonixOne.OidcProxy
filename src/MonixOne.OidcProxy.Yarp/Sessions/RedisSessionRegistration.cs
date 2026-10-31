@@ -24,24 +24,30 @@ internal static class RedisSessionRegistration
             );
         services
             .AddOptions<KeyManagementOptions>()
-            .Configure<ConnectionMultiplexer, IOptions<ProxyOptions>, ConfiguredKeyXmlEncryptor>(
-                (keys, connection, host, encryptor) =>
+            .Configure<ConnectionMultiplexer, IOptions<ProxyOptions>>(
+                (keys, connection, host) =>
                 {
                     keys.XmlRepository = new RedisXmlRepository(
                         () => connection.GetDatabase(),
                         host.Value.RedisKeyPrefix + "data-protection"
                     );
-                    keys.XmlEncryptor = encryptor;
                 }
+            )
+            .PostConfigure<IServiceProvider>(
+                (keys, services) =>
+                    // All standard host configuration runs before choosing the default wrapper.
+                    keys.XmlEncryptor ??= services.GetRequiredService<ConfiguredKeyXmlEncryptor>()
             )
             .Validate(
                 keys =>
                     keys.XmlRepository!.GetAllElements()
                         .Where(element => element.Name == "key")
                         .All(key =>
-                            key.Descendants("jwe").Any() && !key.Descendants("masterKey").Any()
+                            key.Descendants()
+                                .Any(element => element.Name.LocalName == "encryptedSecret")
+                            && !key.Descendants("masterKey").Any()
                         ),
-                "The framework Data Protection key ring must be encrypted. Use a new Bff:KeyNamespace when upgrading from unprotected keys."
+                "The framework Data Protection key ring in Bff:KeyNamespace must be encrypted; unprotected keys are rejected."
             )
             .ValidateOnStart();
     }

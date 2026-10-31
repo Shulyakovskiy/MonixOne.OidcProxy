@@ -1,10 +1,10 @@
 using System.Globalization;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
-using Jose;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Options;
 using StackExchange.Redis;
 
 namespace MonixOne.OidcProxy.Yarp.Sessions;
@@ -17,14 +17,61 @@ namespace MonixOne.OidcProxy.Yarp.Sessions;
 internal sealed class SessionStore(
     BffClient client,
     ConnectionMultiplexer connection,
-    IOptions<ProxyOptions> options,
+    IDataProtectionProvider protection,
     TimeProvider timeProvider,
-    IHostApplicationLifetime lifetime
+    IHostApplicationLifetime lifetime,
+    BffTelemetry telemetry
 )
 {
     private readonly CancellationToken _stopping = lifetime.ApplicationStopping;
-    private readonly string _encryptionKey = options.Value.EncryptionKey;
+    private readonly IDataProtector _protector = protection.CreateProtector(
+        BffConstants.SessionProtectionPurpose,
+        client.RedisKeyPrefix
+    );
     private IDatabase Database => connection.GetDatabase();
+
+    // Session indexes and their records share a Redis Cluster slot per client.
+    private string SessionKey(string id) =>
+        client.RedisKeyPrefix + "sessions:{" + client.RedisKeyPrefix + "}:" + id;
+
+    private string IndexKey(string issuer, string? subject, string? sid) =>
+        client.RedisKeyPrefix
+        + "session-index:{"
+        + client.RedisKeyPrefix
+        + "}:"
+        + Convert.ToHexString(
+            SHA256.HashData(
+                Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new[] { issuer, subject, sid }))
+            )
+        );
+
+    private const string CreateScript = """
+        if not redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2], 'NX') then return 0 end
+        for i = 2, #KEYS do
+            redis.call('ZREMRANGEBYSCORE', KEYS[i], '-inf', ARGV[3])
+            redis.call('ZADD', KEYS[i], ARGV[4], KEYS[1])
+            if redis.call('PTTL', KEYS[i]) < tonumber(ARGV[5]) then
+                redis.call('PEXPIRE', KEYS[i], ARGV[5])
+            end
+        end
+        return 1
+        """;
+
+    private const string LogoutScript = """
+        if redis.call('EXISTS', KEYS[2]) == 1 then return {1, 0} end
+        local removed = 0
+        for i = 3, #KEYS do
+            if redis.call('ZSCORE', KEYS[1], KEYS[i]) then
+                removed = removed + redis.call('DEL', KEYS[i])
+                redis.call('ZREM', KEYS[1], KEYS[i])
+            end
+        end
+        if redis.call('ZCARD', KEYS[1]) == 0 then
+            redis.call('SET', KEYS[2], '1', 'EX', ARGV[1])
+            return {1, removed}
+        end
+        return {0, removed}
+        """;
 
     private const string CompareExchangeScript = """
         if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
@@ -43,12 +90,20 @@ internal sealed class SessionStore(
     {
         cancellationToken.ThrowIfCancellationRequested();
         var now = timeProvider.GetUtcNow();
+        var absoluteTimeout = ticket.Properties.IsPersistent
+            ? client.Options.RememberedSessionTimeout
+            : client.Options.SessionAbsoluteTimeout;
         var id = RandomNumberGenerator.GetHexString(64);
-        var key = client.RedisKeyPrefix + "sessions:" + id;
+        var key = SessionKey(id);
         var state = new StoredSession(
             Convert.ToBase64String(TicketSerializer.Default.Serialize(ticket)),
-            now + client.Options.SessionAbsoluteTimeout,
-            now + client.Options.SessionIdleTimeout,
+            now + absoluteTimeout,
+            now
+                + (
+                    ticket.Properties.IsPersistent
+                        ? absoluteTimeout
+                        : client.Options.SessionIdleTimeout
+                ),
             key,
             RefreshAt: StoredSession.CalculateRefreshAt(
                 DateTimeOffset.Parse(
@@ -60,21 +115,45 @@ internal sealed class SessionStore(
             )
         );
         var value = Encode(state);
+        var keys = new List<RedisKey> { key };
+        ticket.Properties.Items.TryGetValue(BffConstants.ProviderIssuer, out var issuer);
+        ticket.Properties.Items.TryGetValue(BffConstants.ProviderSubject, out var subject);
+        ticket.Properties.Items.TryGetValue(BffConstants.ProviderSession, out var sid);
+        if (!string.IsNullOrEmpty(issuer))
+        {
+            if (!string.IsNullOrEmpty(subject))
+                keys.Add(IndexKey(issuer, subject, null));
+            if (!string.IsNullOrEmpty(sid))
+                keys.Add(IndexKey(issuer, null, sid));
+            if (!string.IsNullOrEmpty(subject) && !string.IsNullOrEmpty(sid))
+                keys.Add(IndexKey(issuer, subject, sid));
+        }
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_stopping);
-        timeout.CancelAfter(TimeSpan.FromSeconds(5));
+        timeout.CancelAfter(client.Options.SessionStoreTimeout);
         try
         {
             timeout.Token.ThrowIfCancellationRequested();
             if (
-                !await Database
-                    .StringSetAsync(key, value, Lifetime(state), When.NotExists)
-                    .WaitAsync(timeout.Token)
+                (long)
+                    await Database
+                        .ScriptEvaluateAsync(
+                            CreateScript,
+                            keys.ToArray(),
+                            [
+                                value,
+                                Math.Max(1L, (long)Lifetime(state).TotalMilliseconds),
+                                now.ToUnixTimeMilliseconds(),
+                                state.AbsoluteExpiresAt.ToUnixTimeMilliseconds(),
+                                (long)absoluteTimeout.TotalMilliseconds,
+                            ]
+                        )
+                        .WaitAsync(timeout.Token) != 1
             )
                 throw new InvalidOperationException("Unable to allocate a unique server session.");
         }
         catch (OperationCanceledException e) when (timeout.IsCancellationRequested)
         {
-            // An unacknowledged SET can leave an unreachable record until TTL.
+            // An unacknowledged creation script can leave an unreachable record until TTL.
             // Sign-in owns revocation of the credentials already issued by IdP.
             throw new SessionUnavailableException(
                 "Unable to confirm session creation within its server budget.",
@@ -85,6 +164,7 @@ internal sealed class SessionStore(
         {
             throw new SessionUnavailableException("The session store is stopping.", e);
         }
+        telemetry.SessionCreated(client.Name);
         return id;
     }
 
@@ -92,7 +172,7 @@ internal sealed class SessionStore(
     {
         if (!IsValidId(id))
             return null;
-        var key = client.RedisKeyPrefix + "sessions:" + id;
+        var key = SessionKey(id);
         for (var attempt = 0; attempt <= 16; attempt++)
         {
             string? value = await Database.StringGetAsync(key).WaitAsync(cancellationToken);
@@ -125,7 +205,7 @@ internal sealed class SessionStore(
         if (updated is not null && lifetime > TimeSpan.Zero)
             value = updated == expected.State ? expected.Value : Encode(updated);
         return CompareExchangeRawAsync(
-            client.RedisKeyPrefix + "sessions:" + expected.Id,
+            SessionKey(expected.Id),
             expected.Value,
             value,
             lifetime,
@@ -153,15 +233,21 @@ internal sealed class SessionStore(
                 ]
             )
             .WaitAsync(cancellationToken);
-        return (long)result == 1;
+        var changed = (long)result == 1;
+        if (!changed)
+            telemetry.CasConflict(client.Name);
+        else if (updated is null)
+            telemetry.SessionRemoved(client.Name);
+        return changed;
     }
 
     internal async Task RemoveAsync(string id, CancellationToken cancellationToken)
     {
         if (!IsValidId(id))
             return;
-        var key = client.RedisKeyPrefix + "sessions:" + id;
-        await Database.KeyDeleteAsync(key).WaitAsync(cancellationToken);
+        var key = SessionKey(id);
+        if (await Database.KeyDeleteAsync(key).WaitAsync(cancellationToken))
+            telemetry.SessionRemoved(client.Name);
     }
 
     internal async Task<AuthenticationTicket?> TakeAsync(
@@ -171,10 +257,11 @@ internal sealed class SessionStore(
     {
         if (!IsValidId(id))
             return null;
-        var key = client.RedisKeyPrefix + "sessions:" + id;
+        var key = SessionKey(id);
         string? value = await Database.StringGetDeleteAsync(key).WaitAsync(cancellationToken);
         if (value is null)
             return null;
+        telemetry.SessionRemoved(client.Name);
         try
         {
             return Decode(value, key)?.ReadTicket();
@@ -187,32 +274,84 @@ internal sealed class SessionStore(
     }
 
     private string Encode(StoredSession state) =>
-        JWT.Encode(
-            JsonSerializer.Serialize(state),
-            _encryptionKey,
-            JweAlgorithm.PBES2_HS256_A128KW,
-            JweEncryption.A256GCM
+        _protector.Protect(JsonSerializer.Serialize(state));
+
+    internal async Task RevokeSessionsAsync(
+        string issuer,
+        string? subject,
+        string? sid,
+        string jwtId,
+        CancellationToken cancellationToken
+    )
+    {
+        var index = IndexKey(issuer, subject, sid);
+        await Database
+            .SortedSetRemoveRangeByScoreAsync(
+                index,
+                double.NegativeInfinity,
+                timeProvider.GetUtcNow().ToUnixTimeMilliseconds()
+            )
+            .WaitAsync(cancellationToken);
+        // Index entries expire with the absolute lifetime; no scans or cleanup worker.
+        // Each batch atomically deletes records and index members. The final batch also
+        // commits the replay marker, so duplicate notifications cannot close a later login.
+        for (var batch = 0; batch < client.Options.BackchannelLogout.MaximumBatches; batch++)
+        {
+            var members = await Database
+                .SortedSetRangeByRankAsync(index, 0, client.Options.BackchannelLogout.BatchSize - 1)
+                .WaitAsync(cancellationToken);
+            var keys = new List<RedisKey> { index, LogoutKey(issuer, jwtId) };
+            keys.AddRange(members.Select(member => (RedisKey)(string)member!));
+            var result = (RedisResult[])
+                (
+                    await Database
+                        .ScriptEvaluateAsync(
+                            LogoutScript,
+                            keys.ToArray(),
+                            [
+                                (long)
+                                    Math.Ceiling(
+                                        client
+                                            .Options
+                                            .BackchannelLogout
+                                            .ReplayRetention
+                                            .TotalSeconds
+                                    ),
+                            ]
+                        )
+                        .WaitAsync(cancellationToken)
+                )!;
+            telemetry.SessionRemoved(client.Name, (long)result[1]);
+            if ((long)result[0] == 1)
+                return;
+        }
+        throw new SessionUnavailableException(
+            "Back-channel logout exceeded its bounded session batch limit."
+        );
+    }
+
+    private string LogoutKey(string issuer, string jwtId) =>
+        client.RedisKeyPrefix
+        + "logout:{"
+        + client.RedisKeyPrefix
+        + "}:"
+        + Convert.ToHexString(
+            SHA256.HashData(
+                Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new[] { issuer, jwtId }))
+            )
         );
 
     private StoredSession? Decode(string value, string key)
     {
         try
         {
-            var state = JsonSerializer.Deserialize<StoredSession>(
-                JWT.Decrypt(
-                    value,
-                    _encryptionKey,
-                    JweAlgorithm.PBES2_HS256_A128KW,
-                    JweEncryption.A256GCM
-                )
-            );
+            var state = JsonSerializer.Deserialize<StoredSession>(_protector.Unprotect(value));
             // Bind the authenticated payload to its application, client and session ID.
             return state?.SessionKey == key ? state : null;
         }
         catch (Exception e)
             when (e
-                    is JoseException
-                        or CryptographicException
+                    is CryptographicException
                         or JsonException
                         or FormatException
                         or ArgumentException

@@ -4,9 +4,10 @@ using System.Xml.Linq;
 using Jose;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.DataProtection.KeyManagement;
+using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
-using Microsoft.IdentityModel.Tokens;
 using StackExchange.Redis;
 
 namespace MonixOne.OidcProxy.Yarp.Tests;
@@ -14,6 +15,75 @@ namespace MonixOne.OidcProxy.Yarp.Tests;
 [Collection("Infrastructure")]
 public sealed class EncryptionKeyTests(InfrastructureFixture infrastructure)
 {
+    [Fact]
+    public async Task Proxy_FrameworkKeyRotation_KeepsExistingSessionAcrossRestart()
+    {
+        // Arrange: rotate data keys through the standard key manager, retaining old keys.
+        var ct = TestContext.Current.CancellationToken;
+        using var identity = new OidcWireMock(infrastructure);
+        await using var host = identity.CreateBff();
+        using var browser = host.CreateBrowser();
+        using var provider = identity.CreateIdentityBrowser();
+        using var login = await browser.LoginAsync(provider);
+        var manager = host.Services.GetRequiredService<IKeyManager>();
+        var now = DateTimeOffset.UtcNow;
+        manager.CreateNewKey(now, now.AddDays(90));
+        await using var restarted = identity.CreateBff(host.KeyNamespace);
+        using var replica = restarted.CreateBrowser(handleCookies: false);
+        replica.DefaultRequestHeaders.Add("Cookie", SessionCookie(login));
+
+        // Act
+        using var existing = await replica.ApiAsync(cancellationToken: ct);
+        using var original = await browser.ApiAsync(cancellationToken: ct);
+
+        // Assert: original cookies and records remain readable after key rotation.
+        existing.StatusCode.ShouldBe(HttpStatusCode.OK);
+        original.StatusCode.ShouldBe(HttpStatusCode.OK);
+        manager.GetAllKeys().Count.ShouldBeGreaterThanOrEqualTo(2);
+    }
+
+    [Fact]
+    public async Task Login_HostUsesCertificateKeyProtection_DoesNotRequirePasswordWrapper()
+    {
+        // Arrange: use the framework certificate wrapper with the existing Redis repository.
+        var ct = TestContext.Current.CancellationToken;
+        using var identity = new OidcWireMock(infrastructure);
+        await using var host = identity.CreateBff();
+        host.EncryptionKey = null;
+        await using var configured = host.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+                services.AddDataProtection().ProtectKeysWithCertificate(infrastructure.Certificate)
+            )
+        );
+        using var browser = configured.CreateClient(
+            new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactoryClientOptions
+            {
+                BaseAddress = BffApplicationFactory.Origin,
+                AllowAutoRedirect = false,
+            }
+        );
+        using var provider = identity.CreateIdentityBrowser();
+
+        // Act
+        using var login = await browser.LoginAsync(provider);
+        using var accepted = await browser.ApiAsync(cancellationToken: ct);
+        var entries = await infrastructure
+            .Connection.GetDatabase()
+            .ListRangeAsync("test-spa:testing:" + host.KeyNamespace + ":data-protection");
+
+        // Assert
+        login.StatusCode.ShouldBe(HttpStatusCode.Redirect);
+        accepted.StatusCode.ShouldBe(HttpStatusCode.OK);
+        entries.ShouldNotBeEmpty();
+        foreach (var entry in entries)
+        {
+            var xml = XElement.Parse(entry.ToString());
+            xml.Descendants("jwe").ShouldBeEmpty();
+            xml.Descendants("masterKey").ShouldBeEmpty();
+            xml.Descendants().ShouldContain(element => element.Name.LocalName == "EncryptedData");
+        }
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]
@@ -34,7 +104,7 @@ public sealed class EncryptionKeyTests(InfrastructureFixture infrastructure)
     }
 
     [Fact]
-    public async Task Login_SessionDataIsJwe_DecryptsDirectlyWithTheConfigurationKey()
+    public async Task Login_SessionDataUsesFrameworkProtection_ContainsOnlyServerCredentials()
     {
         // Arrange
         using var identity = new OidcWireMock(infrastructure);
@@ -47,22 +117,15 @@ public sealed class EncryptionKeyTests(InfrastructureFixture infrastructure)
         var key = SessionKey(host.KeyNamespace);
         var encrypted = (string)
             (await infrastructure.Connection.GetDatabase().StringGetAsync(key))!;
-        var json = JWT.Decrypt(
-            encrypted,
-            infrastructure.EncryptionKey,
-            JweAlgorithm.PBES2_HS256_A128KW,
-            JweEncryption.A256GCM
-        );
+        var json = host.SessionProtector.Unprotect(encrypted);
         var payload = JsonNode.Parse(json)!;
         var ticket = TicketSerializer.Default.Deserialize(
             Convert.FromBase64String(payload["Ticket"]!.GetValue<string>())
         )!;
 
-        // Assert: the Redis session needs no Data Protection APIs or key ring to decrypt.
+        // Assert: the session is bound to the framework key ring and client purpose.
         login.StatusCode.ShouldBe(HttpStatusCode.Redirect);
         payload["SessionKey"]!.GetValue<string>().ShouldBe(key.ToString());
-        JWT.Headers(encrypted)["alg"].ShouldBe("PBES2-HS256+A128KW");
-        JWT.Headers(encrypted)["enc"].ShouldBe("A256GCM");
         (
             ticket.Properties.GetTokenValue("access_token") == identity.LastAccessToken
         ).ShouldBeTrue();
@@ -133,11 +196,11 @@ public sealed class EncryptionKeyTests(InfrastructureFixture infrastructure)
 
     [Theory]
     [InlineData("ciphertext")]
-    [InlineData("algorithm")]
+    [InlineData("wrong-purpose")]
     [InlineData("wrong-key")]
     [InlineData("invalid-json")]
     [InlineData("missing-binding")]
-    public async Task Proxy_InvalidJweSession_RejectsAndRemovesTheRecord(string defect)
+    public async Task Proxy_InvalidProtectedSession_RejectsAndRemovesTheRecord(string defect)
     {
         // Arrange: the cookie remains valid; only the Redis session changes.
         var ct = TestContext.Current.CancellationToken;
@@ -149,31 +212,16 @@ public sealed class EncryptionKeyTests(InfrastructureFixture infrastructure)
         var database = infrastructure.Connection.GetDatabase();
         var key = SessionKey(host.KeyNamespace);
         var encrypted = (string)(await database.StringGetAsync(key))!;
-        var parts = encrypted.Split('.');
+        var protector = host.SessionProtector;
         if (defect == "ciphertext")
         {
-            var ciphertext = Base64UrlEncoder.DecodeBytes(parts[3]);
+            var ciphertext = WebEncoders.Base64UrlDecode(encrypted);
             ciphertext[0] ^= 1;
-            parts[3] = Base64UrlEncoder.Encode(ciphertext);
-            encrypted = string.Join('.', parts);
-        }
-        else if (defect == "algorithm")
-        {
-            parts[0] = Base64UrlEncoder.Encode(
-                Base64UrlEncoder
-                    .Decode(parts[0])
-                    .Replace("A256GCM", "A128GCM", StringComparison.Ordinal)
-            );
-            encrypted = string.Join('.', parts);
+            encrypted = WebEncoders.Base64UrlEncode(ciphertext);
         }
         else
         {
-            var json = JWT.Decrypt(
-                encrypted,
-                infrastructure.EncryptionKey,
-                JweAlgorithm.PBES2_HS256_A128KW,
-                JweEncryption.A256GCM
-            );
+            var json = protector.Unprotect(encrypted);
             if (defect == "invalid-json")
                 json = "{";
             if (defect == "missing-binding")
@@ -182,12 +230,19 @@ public sealed class EncryptionKeyTests(InfrastructureFixture infrastructure)
                 payload.AsObject().Remove("SessionKey");
                 json = payload.ToJsonString();
             }
-            encrypted = JWT.Encode(
-                json,
-                defect == "wrong-key" ? "a different test secret" : infrastructure.EncryptionKey,
-                JweAlgorithm.PBES2_HS256_A128KW,
-                JweEncryption.A256GCM
-            );
+            if (defect == "wrong-key")
+            {
+                using var other = identity.CreateBff();
+                encrypted = other.SessionProtector.Protect(json);
+            }
+            else
+                encrypted = (
+                    defect == "wrong-purpose"
+                        ? host
+                            .Services.GetRequiredService<IDataProtectionProvider>()
+                            .CreateProtector("other-purpose")
+                        : protector
+                ).Protect(json);
         }
         await database.StringSetAsync(key, encrypted);
 
@@ -204,7 +259,7 @@ public sealed class EncryptionKeyTests(InfrastructureFixture infrastructure)
     [InlineData("session")]
     [InlineData("client")]
     [InlineData("namespace")]
-    public async Task Proxy_JweCopiedToAnotherSession_RejectsWithoutAffectingTheOriginal(
+    public async Task Proxy_ProtectedRecordCopiedToAnotherSession_RejectsWithoutAffectingTheOriginal(
         string boundary
     )
     {
@@ -246,7 +301,7 @@ public sealed class EncryptionKeyTests(InfrastructureFixture infrastructure)
     }
 
     [Fact]
-    public async Task Startup_UnprotectedLegacyFrameworkKeys_RequiresAnExplicitReset()
+    public async Task Startup_UnprotectedFrameworkKeys_RejectsBeforeRequests()
     {
         // Arrange
         using var identity = new OidcWireMock(infrastructure);

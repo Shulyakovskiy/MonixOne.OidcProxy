@@ -27,9 +27,12 @@ public sealed class ProxyOptions
     public string KeyNamespace { get; set; } = "oidcproxy";
 
     /// <summary>
-    /// The password used by jose-jwt PBES2 to encrypt session data in Redis.
+    /// The password used by jose-jwt PBES2 to protect framework keys in Redis.
+    /// Framework Data Protection encrypts sessions and rotates data keys.
     /// Supply a strong random secret through configuration and
     /// keep the same value across restarts and replicas of this BFF.
+    /// Omit when the host configures standard key encryption, for example
+    /// AddDataProtection().ProtectKeysWithCertificate(...).
     /// </summary>
     public string EncryptionKey { get; set; } = string.Empty;
 

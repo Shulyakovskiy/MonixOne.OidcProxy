@@ -87,9 +87,14 @@ public sealed class PipelineCompositionTests(InfrastructureFixture infrastructur
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Pipeline_RateLimitRunsAfterRoutingAndBeforeAuthentication(bool enableBff)
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Pipeline_RateLimitRunsAfterRoutingAndBeforeAuthentication(
+        bool enableBff,
+        bool trustAllProxies
+    )
     {
         // Arrange: exercise the public pipeline extension with a real native YARP route.
         var ct = TestContext.Current.CancellationToken;
@@ -107,6 +112,7 @@ public sealed class PipelineCompositionTests(InfrastructureFixture infrastructur
             ["Bff:RedisConnectionStringKey"] = "Gateway:Redis",
             ["Gateway:Redis"] = infrastructure.Redis.GetConnectionString(),
             ["ForwardedHeaders:KnownProxies:0"] = "10.20.30.40",
+            ["ForwardedHeaders:TrustAllProxies"] = trustAllProxies.ToString(),
             ["ReverseProxy:Routes:api:ClusterId"] = "api",
             ["ReverseProxy:Routes:api:RateLimiterPolicy"] = "bounded",
             ["ReverseProxy:Routes:api:Match:Hosts:0"] = "spa.example",
@@ -143,11 +149,13 @@ public sealed class PipelineCompositionTests(InfrastructureFixture infrastructur
         app.Use(
             (context, next) =>
             {
-                context.Connection.RemoteIpAddress = IPAddress.Parse("10.20.30.40");
+                context.Connection.RemoteIpAddress = IPAddress.Parse(
+                    trustAllProxies ? "172.22.3.9" : "10.20.30.40"
+                );
                 return next(context);
             }
         );
-        (string Scheme, string PathBase, string? Route)? observed = null;
+        (string Scheme, string PathBase, string? Route, IPAddress? ClientIp)? observed = null;
         app.UseOidcProxy(pipeline =>
         {
             pipeline.Use(
@@ -156,7 +164,8 @@ public sealed class PipelineCompositionTests(InfrastructureFixture infrastructur
                     observed = (
                         context.Request.Scheme,
                         context.Request.PathBase.Value ?? "",
-                        (context.GetEndpoint() as RouteEndpoint)?.RoutePattern.RawText
+                        (context.GetEndpoint() as RouteEndpoint)?.RoutePattern.RawText,
+                        context.Connection.RemoteIpAddress
                     );
                     return next(context);
                 }
@@ -165,6 +174,7 @@ public sealed class PipelineCompositionTests(InfrastructureFixture infrastructur
         });
         await app.StartAsync(ct);
         using var client = app.GetTestClient();
+        client.DefaultRequestHeaders.Add("X-Forwarded-For", "203.0.113.10");
         client.DefaultRequestHeaders.Add("X-Forwarded-Proto", "https");
         client.DefaultRequestHeaders.Add("X-Forwarded-Host", "spa.example");
         client.DefaultRequestHeaders.Add("X-CSRF", "1");
@@ -179,6 +189,7 @@ public sealed class PipelineCompositionTests(InfrastructureFixture infrastructur
         second.StatusCode.ShouldBe(HttpStatusCode.TooManyRequests);
         observed.ShouldNotBeNull();
         observed.Value.Scheme.ShouldBe("https");
+        observed.Value.ClientIp.ShouldBe(IPAddress.Parse("203.0.113.10"));
         observed.Value.PathBase.ShouldBe(enableBff ? "/admin" : "");
         observed.Value.Route.ShouldBe("/api/status");
         backend.LogEntries.Count.ShouldBe(enableBff ? 0 : 1);
