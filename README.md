@@ -6,6 +6,14 @@ BFF для SPA на .NET 10: ASP.NET Core OpenID Connect, YARP и Redis.
 OAuth-токены хранятся в зашифрованных серверных сессиях; браузер получает HttpOnly cookie.
 Native API, их JWT policies и балансировка работают в том же GW.
 
+Обычный вход выдаёт сессионную cookie и сохраняет прежние idle/absolute лимиты.
+Для явного «Запомнить» SPA передаёт `rememberMe=true` в `/.auth/login` вместе с
+локальным `returnUrl`. Стандартный защищённый OIDC state сохраняет выбор до callback.
+Постоянная cookie и зашифрованная Redis-сессия по умолчанию действуют 30 дней без
+более короткого idle-лимита; refresh и активность этот срок не продлевают.
+Срок настраивается через `Bff:Clients:<client>:RememberedSessionTimeout`.
+Logout, отзыв доступа и истечение refresh token могут завершить вход раньше.
+
 ```csharp
 builder.Services.AddOidcProxy(builder.Configuration);
 // После builder.Build():
@@ -78,6 +86,25 @@ CAS предполагает сохранность подтверждённых
 на новое внедрение, без миграций. Код Duende не переносился: использованы стандартные
 протоколы и уже подключённые framework/library механизмы. Подключение уведомлений IdP,
 хранение сертификатов, экспорт telemetry и проверка failover Redis принадлежат окружению.
+
+## GW за балансировщиком или Swarm ingress
+
+Обработку `X-Forwarded-For/Proto/Host` регистрирует пакет. В GW достаточно
+`AddOidcProxy(configuration)` и `UseOidcProxy(pipeline => …)`; повторные
+`Configure/PostConfigure<ForwardedHeadersOptions>` и `UseForwardedHeaders()` не нужны.
+Пакет восстанавливает `RemoteIpAddress`, HTTPS-схему и host до callback с rate limiting.
+
+Для закрытого GW за доверенным шлюзом доступна опция
+`ForwardedHeaders:TrustAllProxies=true`: она убирает проверку IP непосредственного
+proxy и обрабатывает один последний hop (`ForwardLimit=1`) без привязки к подсетям
+Swarm. Прямой недоверенный доступ к GW должен быть исключён. Без опции действует
+строгий режим `KnownProxies` / `KnownIPNetworks`; `AllowedHosts`, CORS, CSRF и
+аутентификация сохраняются в обоих режимах. Публикацию через ingress, реплики и
+`start-first` менять не требуется.
+
+Пример конфигурации, выбор исходного IP и граница ответственности GW/Identity —
+в разделе «Как работает → GW за балансировщиком: IP и HTTPS»
+[интерактивного справочника](docs/index.html#flow).
 
 ## Единый интерактивный справочник
 

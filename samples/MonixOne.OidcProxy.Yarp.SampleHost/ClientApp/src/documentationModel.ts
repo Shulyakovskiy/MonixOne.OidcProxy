@@ -51,7 +51,7 @@ app.UseOidcProxy(pipeline =>
 export const pipeline = [
   [
     "Forwarded headers",
-    "Восстановить For / Proto / Host от доверенного proxy до выбора клиента. KnownProxies/KnownIPNetworks и AllowedHosts задаются конфигурацией.",
+    "Восстановить For / Proto / Host до выбора клиента. По умолчанию проверяются KnownProxies/KnownIPNetworks; для закрытого GW доступен явный TrustAllProxies с одним hop. AllowedHosts сохраняется.",
   ],
   [
     "PathBase",
